@@ -5,6 +5,7 @@
 #include <QClipboard>
 #include <QFont>
 #include <QFontInfo>
+#include <QPushButton>
 #include <QTimer>
 #include <QWheelEvent>
 #include <iostream>
@@ -41,25 +42,23 @@ MainWindow::MainWindow(int wnd_index, const QString &p, QWidget *parent)
     ui->label_info->setAlignment(Qt::AlignCenter);
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_text), "Text");
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_sample), "Sample");
+    QPushButton *btn_tab = new QPushButton(this);
+    btn_tab->setFlat(true);
+    btn_tab->setText("Copy as Image");
+    btn_tab->setCursor(Qt::PointingHandCursor);
+    connect(btn_tab, &QPushButton::clicked, this, [=]() {
+        btn_tab->setEnabled(false);
+        auto pix = ui->label_preview->grab();
+        qApp->clipboard()->setPixmap(pix);
+        btn_tab->setEnabled(true);
+    });
+    ui->tabWidget->setCornerWidget(btn_tab);
     // Seer filtered all context menu
     ui->lineEdit->setContextMenuPolicy(Qt::NoContextMenu);
     // not able to enable keyboard input
     // so only we use default text or paste from clipboard
     ui->lineEdit->setReadOnly(true);
     ui->lineEdit->setPlaceholderText(g_def_string);
-    connect(ui->lineEdit, &QLineEdit::textChanged, this,
-            &MainWindow::updatePreview);
-    connect(ui->toolButton_clear, &QToolButton::clicked, ui->lineEdit,
-            &QLineEdit::clear);
-    connect(ui->toolButton_paste, &QToolButton::clicked, ui->lineEdit, [=]() {
-        auto text = qApp->clipboard()->text().simplified().trimmed();
-        if (text.isEmpty()) {
-            return;
-        }
-        ui->lineEdit->setText(text);
-        // goto updatePreview
-    });
-
     ui->label_preview->setWordWrap(true);
     ui->label_preview->installEventFilter(this);
 }
@@ -122,8 +121,18 @@ bool MainWindow::init()
     ui->comboBox_style->addItems(
         m_fdb.styles(ui->comboBox_family->currentText()));
 
-    connect(ui->lineEdit, &QLineEdit::textEdited, this,
+    connect(ui->lineEdit, &QLineEdit::textChanged, this,
             &MainWindow::updatePreview);
+    connect(ui->toolButton_clear, &QToolButton::clicked, ui->lineEdit,
+            &QLineEdit::clear);
+    connect(ui->toolButton_paste, &QToolButton::clicked, ui->lineEdit, [=]() {
+        auto text = qApp->clipboard()->text().simplified().trimmed();
+        if (text.isEmpty()) {
+            return;
+        }
+        ui->lineEdit->setText(text);
+        // goto updatePreview
+    });
     connect(ui->comboBox_sz, &QComboBox::currentTextChanged, this,
             &MainWindow::updatePreview);
     connect(ui->comboBox_style, &QComboBox::currentTextChanged, this,
@@ -186,7 +195,7 @@ void MainWindow::updateInfo()
 
     const auto weight = m_fdb.weight(name, style);
     if (weight != -1) {
-        text = "Weight:" + QString::number(weight) + "\n";
+        text = "Weight: " + QString::number(weight) + "\n";
     }
 
     QString ib;
@@ -290,6 +299,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (e->angleDelta().y() == 0) {
         return true;
     }
+
     const auto index_cur = ui->comboBox_sz->currentIndex();
     int index_new        = index_cur;
     // zoom_in

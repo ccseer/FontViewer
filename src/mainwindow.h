@@ -19,12 +19,10 @@ public:
 
     bool init();
 
-    // QWidget interface
 protected:
     virtual bool nativeEvent(const QByteArray &eventType,
                              void *message,
                              long *result) override;
-
     virtual bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
