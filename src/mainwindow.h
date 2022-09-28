@@ -25,6 +25,8 @@ protected:
                              void *message,
                              long *result) override;
 
+    virtual bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     void doResize(const QSize &sz);
     void onDPIChanged(qreal dpi);

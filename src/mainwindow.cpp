@@ -5,6 +5,7 @@
 #include <QFont>
 #include <QFontInfo>
 #include <QTimer>
+#include <QWheelEvent>
 #include <iostream>
 
 #include "oitvar.h"
@@ -12,7 +13,6 @@
 #pragma comment(lib, "user32.lib")
 
 // TODO:
-//      wheel label_preview
 //      UI
 //      ini text
 //      add a tab page to paint all characters in font
@@ -43,6 +43,7 @@ MainWindow::MainWindow(int wnd_index, const QString &p, QWidget *parent)
     ui->lineEdit->setPlaceholderText(g_def_string);
     ui->lineEdit->setReadOnly(true);
     ui->label_preview->setWordWrap(true);
+    ui->label_preview->installEventFilter(this);
 }
 
 MainWindow::~MainWindow()
@@ -257,6 +258,39 @@ void MainWindow::updatePreview()
     }
 
     ui->label_preview->setText(text);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched != ui->label_preview || event->type() != QEvent::Wheel) {
+        return QMainWindow::eventFilter(watched, event);
+    }
+    QWheelEvent *e = static_cast<QWheelEvent *>(event);
+    if (e->modifiers() != Qt::ControlModifier) {
+        return false;
+    }
+    if (e->angleDelta().y() == 0) {
+        return true;
+    }
+    const auto index_cur = ui->comboBox_sz->currentIndex();
+    int index_new        = index_cur;
+    // zoom_in
+    if (e->angleDelta().y() > 0) {
+        if (index_cur >= ui->comboBox_sz->count() - 1) {
+            return true;
+        }
+        index_new = index_cur + 1;
+    }
+    // zoom out
+    else {
+        if (index_cur == 0) {
+            return true;
+        }
+        index_new = index_cur - 1;
+    }
+    ui->comboBox_sz->setCurrentIndex(index_new);
+
+    return true;
 }
 
 //////////////////////////////////////////////
