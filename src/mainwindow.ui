@@ -109,14 +109,14 @@
              <widget class="QLineEdit" name="lineEdit"/>
             </item>
             <item>
-             <widget class="QPushButton" name="pushButton_paste">
+             <widget class="QToolButton" name="toolButton_paste">
               <property name="text">
                <string>Paste</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="pushButton_clear">
+             <widget class="QToolButton" name="toolButton_clear">
               <property name="text">
                <string>Clear</string>
               </property>
@@ -135,7 +135,7 @@
                <x>0</x>
                <y>0</y>
                <width>756</width>
-               <height>395</height>
+               <height>380</height>
               </rect>
              </property>
              <layout class="QGridLayout" name="gridLayout_2">

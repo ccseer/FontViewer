@@ -2,6 +2,7 @@
 
 #include <qt_windows.h>
 
+#include <QClipboard>
 #include <QFont>
 #include <QFontInfo>
 #include <QTimer>
@@ -14,8 +15,9 @@
 
 // TODO:
 //      UI
-//      ini text
-//      add a tab page to paint all characters in font
+//  add a local file text as user defined ini, custom default font
+//      size and display string;
+//  add a tab page to paint all characters in font;
 
 // The quick brown fox jumps over the lazy dog
 constexpr auto g_def_string
@@ -39,9 +41,25 @@ MainWindow::MainWindow(int wnd_index, const QString &p, QWidget *parent)
     ui->label_info->setAlignment(Qt::AlignCenter);
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_text), "Text");
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_sample), "Sample");
+    // Seer filtered all context menu
     ui->lineEdit->setContextMenuPolicy(Qt::NoContextMenu);
-    ui->lineEdit->setPlaceholderText(g_def_string);
+    // not able to enable keyboard input
+    // so only we use default text or paste from clipboard
     ui->lineEdit->setReadOnly(true);
+    ui->lineEdit->setPlaceholderText(g_def_string);
+    connect(ui->lineEdit, &QLineEdit::textChanged, this,
+            &MainWindow::updatePreview);
+    connect(ui->toolButton_clear, &QToolButton::clicked, ui->lineEdit,
+            &QLineEdit::clear);
+    connect(ui->toolButton_paste, &QToolButton::clicked, ui->lineEdit, [=]() {
+        auto text = qApp->clipboard()->text().simplified().trimmed();
+        if (text.isEmpty()) {
+            return;
+        }
+        ui->lineEdit->setText(text);
+        // goto updatePreview
+    });
+
     ui->label_preview->setWordWrap(true);
     ui->label_preview->installEventFilter(this);
 }
