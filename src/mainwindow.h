@@ -26,6 +26,8 @@ protected:
     virtual bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    void initUI(const QStringList &names);
+
     void doResize(const QSize &sz);
     void onDPIChanged(qreal dpi);
     void onThemeChanged(int theme);

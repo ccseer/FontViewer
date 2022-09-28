@@ -15,7 +15,6 @@
 #pragma comment(lib, "user32.lib")
 
 // TODO:
-//      UI
 //  add a local file text as user defined ini, custom default font
 //      size and display string;
 //  add a tab page to paint all characters in font;
@@ -33,13 +32,47 @@ MainWindow::MainWindow(int wnd_index, const QString &p, QWidget *parent)
       ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
-
-    // fixed UI setup
     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
     setWindowTitle("OITViewer");
+}
 
+MainWindow::~MainWindow()
+{
+    delete ui;
+}
+
+void MainWindow::initUI(const QStringList &names)
+{
+    /// widget_top
+    // names
+    for (auto i : names) {
+        ui->comboBox_family->addItem(i);
+    }
+    if (names.size() == 1) {
+        ui->comboBox_family->setEnabled(false);
+    }
+    connect(ui->comboBox_family, &QComboBox::currentTextChanged, this,
+            &MainWindow::onNameChanged);
+    // style
+    ui->comboBox_style->addItems(
+        m_fdb.styles(ui->comboBox_family->currentText()));
+    connect(ui->comboBox_style, &QComboBox::currentTextChanged, this,
+            &MainWindow::onStyleChanged);
+    // sz
+    const auto all_sz = m_fdb.standardSizes();
+    for (auto i : all_sz) {
+        ui->comboBox_sz->addItem(QString::number(i));
+    }
+    if (all_sz.contains(g_def_pt)) {
+        ui->comboBox_sz->setCurrentText(QString::number(g_def_pt));
+    }
+    connect(ui->comboBox_sz, &QComboBox::currentTextChanged, this,
+            &MainWindow::updatePreview);
+    // info
     ui->label_info->setWordWrap(true);
     ui->label_info->setAlignment(Qt::AlignCenter);
+
+    /// tab wnd
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_text), "Text");
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_sample), "Sample");
     QPushButton *btn_tab = new QPushButton(this);
@@ -53,42 +86,30 @@ MainWindow::MainWindow(int wnd_index, const QString &p, QWidget *parent)
         btn_tab->setEnabled(true);
     });
     ui->tabWidget->setCornerWidget(btn_tab);
+    connect(ui->tabWidget, &QTabWidget::currentChanged, this,
+            &MainWindow::onTabChanged);
     // Seer filtered all context menu
     ui->lineEdit->setContextMenuPolicy(Qt::NoContextMenu);
     // not able to enable keyboard input
     // so only we use default text or paste from clipboard
     ui->lineEdit->setReadOnly(true);
     ui->lineEdit->setPlaceholderText(g_def_string);
+    connect(ui->lineEdit, &QLineEdit::textChanged, this,
+            &MainWindow::updatePreview);
+    connect(ui->toolButton_clear, &QToolButton::clicked, ui->lineEdit,
+            &QLineEdit::clear);
+    connect(ui->toolButton_paste, &QToolButton::clicked, ui->lineEdit, [=]() {
+        auto text = qApp->clipboard()->text().simplified().trimmed();
+        if (text.isEmpty()) {
+            return;
+        }
+        ui->lineEdit->setText(text);
+        // goto updatePreview
+    });
+
+    ui->scrollArea->setFrameShape(QFrame::NoFrame);
     ui->label_preview->setWordWrap(true);
     ui->label_preview->installEventFilter(this);
-}
-
-MainWindow::~MainWindow()
-{
-    delete ui;
-}
-
-void MainWindow::sendMsg2Seer(int sub_type, const QByteArray &d)
-{
-    auto h = FindWindowEx(NULL, NULL, L"SeerWindowClass", NULL);
-    if (!h) {
-        std::cout << "FindWindowEx NULL" << std::endl;
-        return;
-    }
-    std::cout << "sendMsg2TopWnd " << m_wnd_index << " " << sub_type
-              << std::endl;
-
-    QByteArray ba;
-    QDataStream ds(&ba, QIODevice::WriteOnly);
-    ds.setVersion(QDataStream::Qt_5_15);
-    OITData oitd{sub_type, m_wnd_index, d};
-    ds << oitd;
-
-    COPYDATASTRUCT cd;
-    cd.cbData = ba.size();
-    cd.lpData = (void *)ba.data();
-    cd.dwData = SEER_OIT_MSG;
-    SendMessage(h, WM_COPYDATA, 0, (LPARAM)(LPVOID)&cd);
 }
 
 bool MainWindow::init()
@@ -103,44 +124,7 @@ bool MainWindow::init()
         std::cout << "applicationFontFamilies err" << std::endl;
         return false;
     }
-    for (auto i : names) {
-        ui->comboBox_family->addItem(i);
-    }
-    if (names.size() == 1) {
-        ui->comboBox_family->setEnabled(false);
-    }
-
-    const auto all_sz = m_fdb.standardSizes();
-    for (auto i : all_sz) {
-        ui->comboBox_sz->addItem(QString::number(i));
-    }
-    if (all_sz.contains(g_def_pt)) {
-        ui->comboBox_sz->setCurrentText(QString::number(g_def_pt));
-    }
-
-    ui->comboBox_style->addItems(
-        m_fdb.styles(ui->comboBox_family->currentText()));
-
-    connect(ui->lineEdit, &QLineEdit::textChanged, this,
-            &MainWindow::updatePreview);
-    connect(ui->toolButton_clear, &QToolButton::clicked, ui->lineEdit,
-            &QLineEdit::clear);
-    connect(ui->toolButton_paste, &QToolButton::clicked, ui->lineEdit, [=]() {
-        auto text = qApp->clipboard()->text().simplified().trimmed();
-        if (text.isEmpty()) {
-            return;
-        }
-        ui->lineEdit->setText(text);
-        // goto updatePreview
-    });
-    connect(ui->comboBox_sz, &QComboBox::currentTextChanged, this,
-            &MainWindow::updatePreview);
-    connect(ui->comboBox_style, &QComboBox::currentTextChanged, this,
-            &MainWindow::onStyleChanged);
-    connect(ui->comboBox_family, &QComboBox::currentTextChanged, this,
-            &MainWindow::onNameChanged);
-    connect(ui->tabWidget, &QTabWidget::currentChanged, this,
-            &MainWindow::onTabChanged);
+    initUI(names);
 
     QTimer::singleShot(0, this, [=]() {
         sendMsg2Seer(SEER_OIT_SUB_LOAD_OK, {});
@@ -342,19 +326,19 @@ void MainWindow::onDPIChanged(qreal dpi)
 void MainWindow::onThemeChanged(int theme)
 {
     auto pal = qApp->palette(this);
-    // light
+    /// light
     if (theme == 0) {
+        ui->scrollAreaWidgetContents->setStyleSheet("");
         pal.setColor(QPalette::Window, "white");
         pal.setColor(QPalette::WindowText, "#333333");
+        this->setPalette(pal);
+        return;
     }
-    // dark
-    else if (theme == 1) {
-        // maybe next time
-        pal.setColor(QPalette::Window, "#333333");
-        pal.setColor(QPalette::WindowText, "white");
-    }
-    this->setPalette(pal);
-    ui->scrollArea->setFrameShape(QFrame::NoFrame);
+    /// dark
+    // need to use qss to set tab color
+    // maybe next time?
+    ui->scrollAreaWidgetContents->setStyleSheet(
+        "background:white; color: #333;");
 }
 
 QVariant MainWindow::getDataFromSeerMsg(const QByteArray &ba) const
@@ -366,61 +350,82 @@ QVariant MainWindow::getDataFromSeerMsg(const QByteArray &ba) const
     return v;
 }
 
+void MainWindow::sendMsg2Seer(int sub_type, const QByteArray &d)
+{
+    auto h = FindWindowEx(NULL, NULL, L"SeerWindowClass", NULL);
+    if (!h) {
+        std::cout << "FindWindowEx NULL" << std::endl;
+        return;
+    }
+    std::cout << "sendMsg2TopWnd " << m_wnd_index << " " << sub_type
+              << std::endl;
+
+    QByteArray ba;
+    QDataStream ds(&ba, QIODevice::WriteOnly);
+    ds.setVersion(QDataStream::Qt_5_15);
+    OITData oitd{sub_type, m_wnd_index, d};
+    ds << oitd;
+
+    COPYDATASTRUCT cd;
+    cd.cbData = ba.size();
+    cd.lpData = (void *)ba.data();
+    cd.dwData = SEER_OIT_MSG;
+    SendMessage(h, WM_COPYDATA, 0, (LPARAM)(LPVOID)&cd);
+}
+
 bool MainWindow::nativeEvent(const QByteArray &eventType,
                              void *message,
                              long *result)
 {
     MSG *m = (MSG *)message;
-    switch (m->message) {
-    case WM_COPYDATA: {
-        auto cds = (PCOPYDATASTRUCT)m->lParam;
-        if (!cds) {
-            break;
-        }
-        switch (cds->dwData) {
-        case SEER_OIT_ATTACHED: {
-            // first msg from seer, once
-            std::cout << "" << std::endl;
-            break;
-        }
-        case SEER_OIT_SIZE_CHANGED: {
-            // 2nd msg from seer
-            // will be messaged anytime it changed
-            const QVariant v = getDataFromSeerMsg(
-                QByteArray(reinterpret_cast<char *>(cds->lpData), cds->cbData));
-            const QSize sz = v.toSize();
-            std::cout << "SEER_OIT_SIZE_CHANGED " << sz.width() << " "
-                      << sz.height() << std::endl;
-            if (sz.isValid()) {
-                doResize(sz);
-            }
-            break;
-        }
-        case SEER_OIT_DPI_CHANGED: {
-            // 3rd msg from seer
-            // will be messaged anytime it changed
-            const QVariant v = getDataFromSeerMsg(
-                QByteArray(reinterpret_cast<char *>(cds->lpData), cds->cbData));
-            std::cout << "SEER_OIT_DPI_CHANGED " << v.toReal() << std::endl;
-            onDPIChanged(v.toReal());
-            break;
-        }
-        case SEER_OIT_THEME_CHANGED: {
-            // 4th msg from seer
-            // only once, no preview window when changing theme setttings
-            const QVariant v = getDataFromSeerMsg(
-                QByteArray(reinterpret_cast<char *>(cds->lpData), cds->cbData));
-            std::cout << "SEER_OIT_THEME_CHANGED " << v.toInt() << std::endl;
-            onThemeChanged(v.toInt());
-            break;
-        }
-        default: {
-            break;
-        }
-        }
+    if (m->message != WM_COPYDATA) {
+        return QWidget::nativeEvent(eventType, message, result);
+    }
+    auto cds = (PCOPYDATASTRUCT)m->lParam;
+    if (!cds) {
+        return false;
+    }
 
+    switch (cds->dwData) {
+    case SEER_OIT_ATTACHED: {
+        // first msg from seer, once
+        std::cout << "" << std::endl;
+        break;
+    }
+    case SEER_OIT_SIZE_CHANGED: {
+        // 2nd msg from seer
+        // will be messaged anytime it changed
+        const QVariant v = getDataFromSeerMsg(
+            QByteArray(reinterpret_cast<char *>(cds->lpData), cds->cbData));
+        const QSize sz = v.toSize();
+        std::cout << "SEER_OIT_SIZE_CHANGED " << sz.width() << " "
+                  << sz.height() << std::endl;
+        if (sz.isValid()) {
+            doResize(sz);
+        }
+        break;
+    }
+    case SEER_OIT_DPI_CHANGED: {
+        // 3rd msg from seer
+        // will be messaged anytime it changed
+        const QVariant v = getDataFromSeerMsg(
+            QByteArray(reinterpret_cast<char *>(cds->lpData), cds->cbData));
+        std::cout << "SEER_OIT_DPI_CHANGED " << v.toReal() << std::endl;
+        onDPIChanged(v.toReal());
+        break;
+    }
+    case SEER_OIT_THEME_CHANGED: {
+        // 4th msg from seer
+        // only once, no preview window when changing theme setttings
+        const QVariant v = getDataFromSeerMsg(
+            QByteArray(reinterpret_cast<char *>(cds->lpData), cds->cbData));
+        std::cout << "SEER_OIT_THEME_CHANGED " << v.toInt() << std::endl;
+        onThemeChanged(v.toInt());
+        break;
+    }
+    default: {
         break;
     }
     }
-    return QWidget::nativeEvent(eventType, message, result);
+    return false;
 }
