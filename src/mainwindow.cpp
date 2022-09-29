@@ -10,6 +10,7 @@
 #include <QWheelEvent>
 #include <iostream>
 
+#include "characterwidget.h"
 #include "oitvar.h"
 #include "ui_mainwindow.h"
 #pragma comment(lib, "user32.lib")
@@ -75,6 +76,8 @@ void MainWindow::initUI(const QStringList &names)
     /// tab wnd
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_text), "Text");
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_sample), "Sample");
+    //    ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_char),
+    //                              "Character");
     QPushButton *btn_tab = new QPushButton(this);
     btn_tab->setFlat(true);
     btn_tab->setText("Copy as Image");
@@ -86,6 +89,14 @@ void MainWindow::initUI(const QStringList &names)
         btn_tab->setEnabled(true);
     });
     ui->tabWidget->setCornerWidget(btn_tab);
+
+    // TODO: need some modifications to make it work
+    auto scrollArea      = new QScrollArea;
+    auto characterWidget = new CharacterWidget;
+    scrollArea->setWidget(characterWidget);
+    ui->tabWidget->addTab(scrollArea, "Sample");
+    characterWidget->updateFont(names.first());
+
     connect(ui->tabWidget, &QTabWidget::currentChanged, this,
             &MainWindow::onTabChanged);
     // Seer filtered all context menu
@@ -157,14 +168,13 @@ void MainWindow::onStyleChanged()
 
     const auto pt_sz = m_fdb.smoothSizes(ui->comboBox_family->currentText(),
                                          ui->comboBox_style->currentText());
-    // BUG:
-    if (pt_sz.size() == cb_sz_t) {
-        return;
-    }
-    ft.setBold(true);
-    for (int i = 0; i < cb_sz_t; ++i) {
-        if (pt_sz.contains(ui->comboBox_sz->itemText(i).toInt())) {
-            ui->comboBox_sz->setItemData(i, QVariant(ft), Qt::FontRole);
+
+    if (pt_sz.size() != cb_sz_t) {
+        ft.setBold(true);
+        for (int i = 0; i < cb_sz_t; ++i) {
+            if (pt_sz.contains(ui->comboBox_sz->itemText(i).toInt())) {
+                ui->comboBox_sz->setItemData(i, QVariant(ft), Qt::FontRole);
+            }
         }
     }
     updatePreview();
@@ -182,6 +192,8 @@ void MainWindow::updateInfo()
     if (weight != -1) {
         text = "Weight: " + QString::number(weight) + "\n";
     }
+
+    //TODO: need to show how many char in this font
 
     QString ib;
     if (m_fdb.bold(name, style)) {
@@ -250,6 +262,8 @@ void MainWindow::updatePreview()
     const auto name = ui->comboBox_family->currentText();
     QFont ft(name);
     ft.setPointSize(ui->comboBox_sz->currentText().toInt());
+    // TODO: doesn't work
+    ft.setStyleName(ui->comboBox_style->currentText());
     ui->label_preview->setFont(ft);
 
     QString text;

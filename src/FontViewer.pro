@@ -3,10 +3,12 @@ QT       += core gui widgets
 CONFIG += c++11
 
 SOURCES += \
+    characterwidget.cpp \
     main.cpp \
     mainwindow.cpp
 
 HEADERS += \
+    characterwidget.h \
     mainwindow.h
 
 FORMS += \
