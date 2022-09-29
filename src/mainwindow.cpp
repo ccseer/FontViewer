@@ -19,6 +19,7 @@
 //  add a local file text as user defined ini, custom default font
 //      size and display string;
 //  add a tab page to paint all characters in font;
+//  font type: .woff   .woff2   .eot
 
 // The quick brown fox jumps over the lazy dog
 constexpr auto g_def_string
@@ -91,6 +92,7 @@ void MainWindow::initUI(const QStringList &names)
     ui->tabWidget->setCornerWidget(btn_tab);
 
     // TODO: need some modifications to make it work
+    //       QRawFont ??
     auto scrollArea      = new QScrollArea;
     auto characterWidget = new CharacterWidget;
     scrollArea->setWidget(characterWidget);
@@ -193,7 +195,7 @@ void MainWindow::updateInfo()
         text = "Weight: " + QString::number(weight) + "\n";
     }
 
-    //TODO: need to show how many char in this font
+    // TODO: need to show how many char in this font
 
     QString ib;
     if (m_fdb.bold(name, style)) {
