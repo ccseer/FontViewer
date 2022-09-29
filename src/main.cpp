@@ -26,6 +26,5 @@ int main(int argc, char *argv[])
     if (!w.init()) {
         return ERR_PROCESS;
     }
-    w.show();
     return a.exec();
 }

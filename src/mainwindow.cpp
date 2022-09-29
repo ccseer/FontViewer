@@ -6,7 +6,6 @@
 #include <QFont>
 #include <QFontInfo>
 #include <QPushButton>
-#include <QTimer>
 #include <QWheelEvent>
 #include <iostream>
 
@@ -139,11 +138,12 @@ bool MainWindow::init()
     }
     initUI(names);
 
-    QTimer::singleShot(0, this, [=]() {
-        sendMsg2Seer(SEER_OIT_SUB_LOAD_OK, {});
-        onTabChanged();
-        onNameChanged();
-    });
+    // visible before sending Read msg
+    show();
+
+    sendMsg2Seer(SEER_OIT_SUB_LOAD_OK, {});
+    onTabChanged();
+    onNameChanged();
     return true;
 }
 
