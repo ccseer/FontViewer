@@ -11,10 +11,15 @@
 
 #define SEER_OIT_SUB_KEY_PRESS 6003
 
-// send from seer
-#define SEER_OIT_DPI_CHANGED 6100
-#define SEER_OIT_SIZE_CHANGED 6101
-#define SEER_OIT_ATTACHED 6102
+// msg from seer
+// first msg from seer
+// then the following three msg will be sent immediately
+#define SEER_OIT_ATTACHED 6102 
+// will be messaged anytime it changed
+#define SEER_OIT_SIZE_CHANGED 6101 
+// will be messaged anytime it changed
+#define SEER_OIT_DPI_CHANGED 6100 
+// only once, no preview window when changing theme setttings
 #define SEER_OIT_THEME_CHANGED 6103
 
 // exe return

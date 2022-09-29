@@ -157,6 +157,7 @@ void MainWindow::onStyleChanged()
 
     const auto pt_sz = m_fdb.smoothSizes(ui->comboBox_family->currentText(),
                                          ui->comboBox_style->currentText());
+    // BUG:
     if (pt_sz.size() == cb_sz_t) {
         return;
     }
@@ -388,13 +389,10 @@ bool MainWindow::nativeEvent(const QByteArray &eventType,
 
     switch (cds->dwData) {
     case SEER_OIT_ATTACHED: {
-        // first msg from seer, once
         std::cout << "" << std::endl;
         break;
     }
     case SEER_OIT_SIZE_CHANGED: {
-        // 2nd msg from seer
-        // will be messaged anytime it changed
         const QVariant v = getDataFromSeerMsg(
             QByteArray(reinterpret_cast<char *>(cds->lpData), cds->cbData));
         const QSize sz = v.toSize();
@@ -406,8 +404,6 @@ bool MainWindow::nativeEvent(const QByteArray &eventType,
         break;
     }
     case SEER_OIT_DPI_CHANGED: {
-        // 3rd msg from seer
-        // will be messaged anytime it changed
         const QVariant v = getDataFromSeerMsg(
             QByteArray(reinterpret_cast<char *>(cds->lpData), cds->cbData));
         std::cout << "SEER_OIT_DPI_CHANGED " << v.toReal() << std::endl;
@@ -415,8 +411,6 @@ bool MainWindow::nativeEvent(const QByteArray &eventType,
         break;
     }
     case SEER_OIT_THEME_CHANGED: {
-        // 4th msg from seer
-        // only once, no preview window when changing theme setttings
         const QVariant v = getDataFromSeerMsg(
             QByteArray(reinterpret_cast<char *>(cds->lpData), cds->cbData));
         std::cout << "SEER_OIT_THEME_CHANGED " << v.toInt() << std::endl;
