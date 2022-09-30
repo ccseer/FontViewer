@@ -17,7 +17,7 @@ FORMS += \
 INCLUDEPATH += ../
 HEADERS += ../oitvar.h
 
-VERSION = 1.0.0
+VERSION = 1.1.0
 QMAKE_TARGET_COMPANY = "1218.io"
 QMAKE_TARGET_PRODUCT = "Seer"
 QMAKE_TARGET_DESCRIPTION = "Seer - A Windows Quick Look Tool"
