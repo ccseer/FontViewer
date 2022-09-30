@@ -71,6 +71,7 @@ public:
     {
         return m_char_indexes.size();
     }
+    QPixmap getSelectedCharPix();
 
 public slots:
     void updateFont(const QFont &font);

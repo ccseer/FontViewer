@@ -8,17 +8,18 @@
 #define SEER_OIT_MSG 6000
 #define SEER_OIT_SUB_LOAD_ERR 6001
 #define SEER_OIT_SUB_LOAD_OK 6002
-
 #define SEER_OIT_SUB_KEY_PRESS 6003
+#define SEER_OIT_SUB_WAGGLE 6004
+#define SEER_OIT_SUB_TOAST 6005
 
 // msg from seer
 // first msg from seer
 // then the following three msg will be sent immediately
-#define SEER_OIT_ATTACHED 6102 
+#define SEER_OIT_ATTACHED 6102
 // will be messaged anytime it changed
-#define SEER_OIT_SIZE_CHANGED 6101 
+#define SEER_OIT_SIZE_CHANGED 6101
 // will be messaged anytime it changed
-#define SEER_OIT_DPI_CHANGED 6100 
+#define SEER_OIT_DPI_CHANGED 6100
 // only once, no preview window when changing theme setttings
 #define SEER_OIT_THEME_CHANGED 6103
 

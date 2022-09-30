@@ -81,12 +81,7 @@ void MainWindow::initUI(const QStringList &names)
     btn_tab->setFlat(true);
     btn_tab->setText("Copy as Image");
     btn_tab->setCursor(Qt::PointingHandCursor);
-    connect(btn_tab, &QPushButton::clicked, this, [=]() {
-        btn_tab->setEnabled(false);
-        auto pix = ui->label_preview->grab();
-        qApp->clipboard()->setPixmap(pix);
-        btn_tab->setEnabled(true);
-    });
+    connect(btn_tab, &QPushButton::clicked, this, &MainWindow::onCopyAction);
     ui->tabWidget->setCornerWidget(btn_tab);
 
     //  add a tab page to paint all characters in font
@@ -196,8 +191,6 @@ void MainWindow::updateInfo()
     if (weight != -1) {
         text += "Weight: " + QString::number(weight) + "\n";
     }
-    QRawFont rf(m_path, 12);
-    std::cout << "====" << rf.fontTable("").toStdString() << std::endl;
 
     QString ib;
     if (m_fdb.bold(name, style)) {
@@ -259,6 +252,36 @@ void MainWindow::onTabChanged()
         ui->label_preview->setAlignment(Qt::AlignCenter);
     }
     updatePreview();
+}
+
+void MainWindow::onCopyAction()
+{
+    qApp->setOverrideCursor(Qt::BusyCursor);
+
+    QPixmap pix;
+    if (ui->tabWidget->currentWidget() == ui->tab_text
+        || ui->tabWidget->currentWidget() == ui->tab_sample) {
+        pix = ui->label_preview->grab();
+    }
+    else {
+        // takes too long
+        // pix = m_wnd_char->grab();
+        pix = m_wnd_char->getSelectedCharPix();
+        if (pix.isNull()) {
+            // sendMsg2Seer(SEER_OIT_SUB_WAGGLE, {});
+
+            QByteArray ba;
+            QDataStream ds(&ba, QIODevice::WriteOnly);
+            ds.setVersion(QDataStream::Qt_5_15);
+            ds << QVariant::fromValue(
+                QString("Please select a character first."));
+            sendMsg2Seer(SEER_OIT_SUB_TOAST, ba);
+        }
+    }
+    if (!pix.isNull()) {
+        qApp->clipboard()->setPixmap(pix);
+    }
+    qApp->restoreOverrideCursor();
 }
 
 void MainWindow::updatePreview()

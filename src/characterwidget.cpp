@@ -74,6 +74,23 @@ void CharacterWidget::init(const QString &path)
     }
 }
 
+QPixmap CharacterWidget::getSelectedCharPix()
+{
+    if (m_last_key == 0) {
+        return {};
+    }
+
+    const QRect rt(0, 0, m_sz_square, m_sz_square);
+    QPixmap pix(rt.size());
+    QPainter p(&pix);
+    p.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
+    p.fillRect(rt, QBrush(Qt::white));
+    p.setFont(m_ft);
+    p.setPen(QPen(Qt::black));
+    p.drawText(rt, Qt::AlignCenter, QString(QChar(m_last_key)));
+    return pix;
+}
+
 void CharacterWidget::updateFont(const QFont &font)
 {
     m_ft        = font;
@@ -93,8 +110,7 @@ QSize CharacterWidget::sizeHint() const
 
 ushort CharacterWidget::getCharIndexAtPos(const QPoint &pt)
 {
-    const uint index
-        = (pt.y() / m_sz_square) * m_columns + pt.x() / m_sz_square;
+    uint index = (pt.y() / m_sz_square) * m_columns + pt.x() / m_sz_square;
     if (index < getCharCount()) {
         return m_char_indexes[index];
     }

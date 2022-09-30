@@ -41,6 +41,7 @@ private:
     void onNameChanged();
     void onStyleChanged();
     void onTabChanged();
+    void onCopyAction();
 
     QFontDatabase m_fdb;
 
