@@ -95,6 +95,7 @@ void MainWindow::initUI(const QStringList &names)
     wnd_char_sa->setFrameShape(QFrame::NoFrame);
     wnd_char_sa->setWidget(m_wnd_char);
     ui->tabWidget->addTab(wnd_char_sa, "Characters");
+    m_wnd_char->installEventFilter(this);
 
     connect(ui->tabWidget, &QTabWidget::currentChanged, this,
             &MainWindow::onTabChanged);
@@ -195,6 +196,8 @@ void MainWindow::updateInfo()
     if (weight != -1) {
         text += "Weight: " + QString::number(weight) + "\n";
     }
+    QRawFont rf(m_path, 12);
+    std::cout << "====" << rf.fontTable("").toStdString() << std::endl;
 
     QString ib;
     if (m_fdb.bold(name, style)) {
@@ -290,8 +293,11 @@ void MainWindow::updatePreview()
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched != ui->label_preview || event->type() != QEvent::Wheel) {
-        return QMainWindow::eventFilter(watched, event);
+    if (!(watched == ui->label_preview || watched == m_wnd_char)) {
+        return false;
+    }
+    if (event->type() != QEvent::Wheel) {
+        return false;
     }
     QWheelEvent *e = static_cast<QWheelEvent *>(event);
     if (e->modifiers() != Qt::ControlModifier) {
@@ -301,23 +307,22 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         return true;
     }
 
-    const auto index_cur = ui->comboBox_sz->currentIndex();
-    int index_new        = index_cur;
+    auto index_cur = ui->comboBox_sz->currentIndex();
     // zoom_in
     if (e->angleDelta().y() > 0) {
         if (index_cur >= ui->comboBox_sz->count() - 1) {
             return true;
         }
-        index_new = index_cur + 1;
+        index_cur = index_cur + 1;
     }
     // zoom out
     else {
         if (index_cur == 0) {
             return true;
         }
-        index_new = index_cur - 1;
+        index_cur = index_cur - 1;
     }
-    ui->comboBox_sz->setCurrentIndex(index_new);
+    ui->comboBox_sz->setCurrentIndex(index_cur);
 
     return true;
 }
@@ -353,7 +358,7 @@ void MainWindow::onThemeChanged(int theme)
     }
     /// dark
     // need to use qss to set tab color
-    // maybe next time?
+    // maybe next time
     ui->scrollAreaWidgetContents->setStyleSheet(
         "background:white; color: #333;");
 }

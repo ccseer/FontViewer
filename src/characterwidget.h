@@ -66,8 +66,6 @@ class CharacterWidget : public QWidget {
 
 public:
     CharacterWidget(QWidget *parent = nullptr);
-    QSize sizeHint() const override;
-
     void init(const QString &path);
     inline const ushort getCharCount() const
     {
@@ -77,22 +75,20 @@ public:
 public slots:
     void updateFont(const QFont &font);
 
-signals:
-    void characterSelected(const QString &character);
-
 protected:
+    QSize sizeHint() const override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
 private:
-    void calculateSquareSize();
+    ushort getCharIndexAtPos(const QPoint &pt);
 
     QList<ushort> m_char_indexes;
     QFont m_ft;
-    int m_columns    = 16;
-    int m_lastKey    = -1;
-    int m_squareSize = 0;
+    ushort m_last_key     = 0;
+    uchar m_sz_square     = 0;
+    const uchar m_columns = 16;
 };
 
 #endif
