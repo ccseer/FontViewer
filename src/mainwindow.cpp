@@ -24,7 +24,7 @@
 constexpr auto g_def_string
     = "It is the time you have wasted for your rose that makes your "
       "rose so important.";
-constexpr auto g_def_pt = 12;
+constexpr auto g_def_pt = 16;
 
 MainWindow::MainWindow(int wnd_index, const QString &p, QWidget *parent)
     : QMainWindow(parent),
@@ -192,49 +192,42 @@ void MainWindow::updateInfo()
         text += "Weight: " + QString::number(weight) + "\n";
     }
 
-    QString ib;
-    if (m_fdb.bold(name, style)) {
-        ib = "Bold";
-    }
-    if (m_fdb.italic(name, style)) {
-        if (!ib.isEmpty()) {
-            ib.append(" & ");
-        }
-        ib = "Italic";
-    }
-    if (!ib.isEmpty()) {
-        ib.append("\n");
-        text.append(ib);
-    }
-
     if (m_fdb.isFixedPitch(name, style)) {
         text += "Fixed Pitch\n";
     }
+
+    QString line;
     if (m_fdb.isScalable(name, style)) {
-        text += "Scalable\n";
+        line += "Scalable, ";
     }
     if (m_fdb.isSmoothlyScalable(name, style)) {
-        text += "Smoothly Scalable\n";
+        line += "Smoothly Scalable, ";
     }
     if (m_fdb.isBitmapScalable(name, style)) {
-        text += "Bitmap Scalable\n";
+        line += "Bitmap Scalable, ";
     }
+    if (!line.isEmpty()) {
+        line = line.trimmed();
+        line = line.left(line.size() - 1);
+        text.append(line + "\n");
+    }
+
     if (m_fdb.isPrivateFamily(name)) {
         text += "Private Family\n";
     }
 
     const auto ws = m_fdb.writingSystems(name);
-    ib.clear();
+    line.clear();
     for (auto i : ws) {
-        ib.append(m_fdb.writingSystemName(i));
-        ib.append(", ");
+        line.append(m_fdb.writingSystemName(i));
+        line.append(", ");
     }
-    if (!ib.isEmpty()) {
-        ib = ib.trimmed();
-        if (ib.endsWith(",")) {
-            ib = ib.left(ib.size() - 1);
+    if (!line.isEmpty()) {
+        line = line.trimmed();
+        if (line.endsWith(",")) {
+            line = line.left(line.size() - 1);
         }
-        text.append(ib + "\n");
+        text.append(line + "\n");
     }
 
     ui->label_info->setText(text.trimmed());
@@ -289,8 +282,13 @@ void MainWindow::updatePreview()
     const auto name = ui->comboBox_family->currentText();
     QFont ft(name);
     ft.setPointSize(ui->comboBox_sz->currentText().toInt());
-    // TODO: doesn't work
-    ft.setStyleName(ui->comboBox_style->currentText());
+    const auto style = ui->comboBox_style->currentText();
+    // doesn't work: https://bugreports.qt.io/browse/QTBUG-69499
+    // ft.setStyleName(ui->comboBox_style->currentText());
+    ft.setWeight(m_fdb.weight(name, style));
+    // there are things like Demi-Italic exists, but we can't support these
+    ft.setItalic(m_fdb.italic(name, style));
+
     ui->label_preview->setFont(ft);
     m_wnd_char->updateFont(ft);
 
