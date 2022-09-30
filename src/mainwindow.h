@@ -40,6 +40,7 @@ private:
     void onStyleChanged();
     void onTabChanged();
 
+    QList<ushort> m_char_indexes;
     QFontDatabase m_fdb;
 
     const int m_wnd_index;

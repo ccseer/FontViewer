@@ -6,6 +6,7 @@
 #include <QFont>
 #include <QFontInfo>
 #include <QPushButton>
+#include <QRawFont>
 #include <QWheelEvent>
 #include <iostream>
 
@@ -91,7 +92,6 @@ void MainWindow::initUI(const QStringList &names)
     ui->tabWidget->setCornerWidget(btn_tab);
 
     // TODO: need some modifications to make it work
-    //       QRawFont ??
     auto scrollArea      = new QScrollArea;
     auto characterWidget = new CharacterWidget;
     scrollArea->setWidget(characterWidget);
@@ -137,6 +137,16 @@ bool MainWindow::init()
         return false;
     }
     initUI(names);
+
+    // init data
+    ushort max = 0xffff;
+    QRawFont rf(m_path, 12);
+    // cost less than 10ms when contains 30k chars
+    for (int i = 0; i < max; ++i) {
+        if (rf.supportsCharacter(i)) {
+            m_char_indexes << i;
+        }
+    }
 
     // visible before sending Read msg
     show();
@@ -188,14 +198,13 @@ void MainWindow::updateInfo()
     const QString name  = ui->comboBox_family->currentText();
     const QString style = ui->comboBox_style->currentText();
 
-    QString text;
+    QString text = QString::number(m_char_indexes.size());
+    text += " characters\n";
 
     const auto weight = m_fdb.weight(name, style);
     if (weight != -1) {
-        text = "Weight: " + QString::number(weight) + "\n";
+        text += "Weight: " + QString::number(weight) + "\n";
     }
-
-    // TODO: need to show how many char in this font
 
     QString ib;
     if (m_fdb.bold(name, style)) {
