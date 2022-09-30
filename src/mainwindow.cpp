@@ -158,7 +158,7 @@ void MainWindow::onStyleChanged()
 {
     // if the size is smooth, make the item bold.
     // unless they are the same, no need to bold all items.
-    QFont ft           = qApp->font();
+    QFont ft           = this->font();
     const auto cb_sz_t = ui->comboBox_sz->count();
     for (int i = 0; i < cb_sz_t; ++i) {
         ui->comboBox_sz->setItemData(i, QVariant(ft), Qt::FontRole);
@@ -431,7 +431,7 @@ bool MainWindow::nativeEvent(const QByteArray &eventType,
 
     switch (cds->dwData) {
     case SEER_OIT_ATTACHED: {
-        std::cout << "" << std::endl;
+        // std::cout << "" << std::endl;
         break;
     }
     case SEER_OIT_SIZE_CHANGED: {
