@@ -4,6 +4,8 @@
 #include <QFontDatabase>
 #include <QMainWindow>
 
+class CharacterWidget;
+
 QT_BEGIN_NAMESPACE
 namespace Ui {
 class MainWindow;
@@ -40,12 +42,12 @@ private:
     void onStyleChanged();
     void onTabChanged();
 
-    QList<ushort> m_char_indexes;
     QFontDatabase m_fdb;
 
     const int m_wnd_index;
     const QString m_path;
 
+    CharacterWidget *m_wnd_char;
     Ui::MainWindow *ui;
 };
 #endif  // MAINWINDOW_H

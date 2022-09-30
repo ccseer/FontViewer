@@ -18,7 +18,6 @@
 // TODO:
 //  add a local file text as user defined ini, custom default font
 //      size and display string;
-//  add a tab page to paint all characters in font;
 //  font type: .woff   .woff2   .eot
 
 // The quick brown fox jumps over the lazy dog
@@ -31,6 +30,7 @@ MainWindow::MainWindow(int wnd_index, const QString &p, QWidget *parent)
     : QMainWindow(parent),
       m_wnd_index(wnd_index),
       m_path(p),
+      m_wnd_char(nullptr),
       ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
@@ -77,8 +77,6 @@ void MainWindow::initUI(const QStringList &names)
     /// tab wnd
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_text), "Text");
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_sample), "Sample");
-    //    ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_char),
-    //                              "Character");
     QPushButton *btn_tab = new QPushButton(this);
     btn_tab->setFlat(true);
     btn_tab->setText("Copy as Image");
@@ -91,12 +89,12 @@ void MainWindow::initUI(const QStringList &names)
     });
     ui->tabWidget->setCornerWidget(btn_tab);
 
-    // TODO: need some modifications to make it work
-    auto scrollArea      = new QScrollArea;
-    auto characterWidget = new CharacterWidget;
-    scrollArea->setWidget(characterWidget);
-    ui->tabWidget->addTab(scrollArea, "Sample");
-    characterWidget->updateFont(names.first());
+    //  add a tab page to paint all characters in font
+    auto wnd_char_sa = new QScrollArea;
+    m_wnd_char       = new CharacterWidget;
+    wnd_char_sa->setFrameShape(QFrame::NoFrame);
+    wnd_char_sa->setWidget(m_wnd_char);
+    ui->tabWidget->addTab(wnd_char_sa, "Characters");
 
     connect(ui->tabWidget, &QTabWidget::currentChanged, this,
             &MainWindow::onTabChanged);
@@ -137,16 +135,8 @@ bool MainWindow::init()
         return false;
     }
     initUI(names);
-
-    // init data
-    ushort max = 0xffff;
-    QRawFont rf(m_path, 12);
-    // cost less than 10ms when contains 30k chars
-    for (int i = 0; i < max; ++i) {
-        if (rf.supportsCharacter(i)) {
-            m_char_indexes << i;
-        }
-    }
+    // init data after initUI
+    m_wnd_char->init(m_path);
 
     // visible before sending Read msg
     show();
@@ -198,8 +188,8 @@ void MainWindow::updateInfo()
     const QString name  = ui->comboBox_family->currentText();
     const QString style = ui->comboBox_style->currentText();
 
-    QString text = QString::number(m_char_indexes.size());
-    text += " characters\n";
+    QString text = QString::number(m_wnd_char->getCharCount());
+    text += " Characters\n";
 
     const auto weight = m_fdb.weight(name, style);
     if (weight != -1) {
@@ -276,6 +266,7 @@ void MainWindow::updatePreview()
     // TODO: doesn't work
     ft.setStyleName(ui->comboBox_style->currentText());
     ui->label_preview->setFont(ft);
+    m_wnd_char->updateFont(ft);
 
     QString text;
     auto cur_wnd = ui->tabWidget->currentWidget();

@@ -61,20 +61,21 @@ class QMouseEvent;
 class QPaintEvent;
 QT_END_NAMESPACE
 
-//! [0]
-class CharacterWidget : public QWidget
-{
+class CharacterWidget : public QWidget {
     Q_OBJECT
 
 public:
     CharacterWidget(QWidget *parent = nullptr);
     QSize sizeHint() const override;
 
+    void init(const QString &path);
+    inline const ushort getCharCount() const
+    {
+        return m_char_indexes.size();
+    }
+
 public slots:
     void updateFont(const QFont &font);
-    void updateSize(const QString &fontSize);
-    void updateStyle(const QString &fontStyle);
-    void updateFontMerging(bool enable);
 
 signals:
     void characterSelected(const QString &character);
@@ -87,11 +88,11 @@ protected:
 private:
     void calculateSquareSize();
 
-    QFont displayFont;
-    int columns = 16;
-    int lastKey = -1;
-    int squareSize = 0;
+    QList<ushort> m_char_indexes;
+    QFont m_ft;
+    int m_columns    = 16;
+    int m_lastKey    = -1;
+    int m_squareSize = 0;
 };
-//! [0]
 
 #endif
