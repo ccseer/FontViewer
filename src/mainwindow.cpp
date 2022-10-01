@@ -16,11 +16,17 @@
 #pragma comment(lib, "user32.lib")
 
 // TODO:
-//  add a local file text as user defined ini, custom default font
+//  1. add a local file text as user defined ini, custom default font
 //      size and display string;
-//  font type: .woff   .woff2   .eot
+//  2. font type: .woff   .woff2   .eot
+//  3. switch ui->lineEdit to combobox with some build-in strings, 
+//      the paste & clear still remains.
+//      string1: 123456789 ~!@#$%^&*()-=
+//      string2: The quick brown fox jumps over the lazy dog.
+//      string3: Waltz, bad nymph, for quick jigs vex.
+//      string4: How vexingly quick daft zebras jump!
 
-// The quick brown fox jumps over the lazy dog
+
 constexpr auto g_def_string
     = "It is the time you have wasted for your rose that makes your "
       "rose so important.";
