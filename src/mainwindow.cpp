@@ -6,7 +6,6 @@
 #include <QFont>
 #include <QFontInfo>
 #include <QPushButton>
-#include <QRawFont>
 #include <QWheelEvent>
 #include <iostream>
 
@@ -19,13 +18,12 @@
 //  1. add a local file text as user defined ini, custom default font
 //      size and display string;
 //  2. font type: .woff   .woff2   .eot
-//  3. switch ui->lineEdit to combobox with some build-in strings, 
+//  3. switch ui->lineEdit to combobox with some build-in strings,
 //      the paste & clear still remains.
 //      string1: 123456789 ~!@#$%^&*()-=
 //      string2: The quick brown fox jumps over the lazy dog.
 //      string3: Waltz, bad nymph, for quick jigs vex.
 //      string4: How vexingly quick daft zebras jump!
-
 
 constexpr auto g_def_string
     = "It is the time you have wasted for your rose that makes your "
@@ -53,9 +51,7 @@ void MainWindow::initUI(const QStringList &names)
 {
     /// widget_top
     // names
-    for (auto i : names) {
-        ui->comboBox_family->addItem(i);
-    }
+    ui->comboBox_family->addItems(names);
     if (names.size() == 1) {
         ui->comboBox_family->setEnabled(false);
     }
