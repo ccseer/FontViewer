@@ -19,7 +19,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("Corey");
     a.setApplicationName("Seer");
     a.setOrganizationDomain("http://1218.io");
-    a.setApplicationName("FontViewer");
+    // a.setApplicationName("FontViewer");
     a.setApplicationDisplayName("FontViewer");
 
     MainWindow w(args[1].toInt(), p);
