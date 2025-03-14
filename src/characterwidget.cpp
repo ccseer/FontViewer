@@ -126,7 +126,7 @@ void CharacterWidget::mouseMoveEvent(QMouseEvent *event)
               .arg(m_ft.family())
           + QChar(c) + QString::fromLatin1("</span><p>Value: 0x")
           + QString::number(c, 16);
-    QToolTip::showText(event->globalPos(), text, this);
+    QToolTip::showText(event->globalPosition().toPoint(), text, this);
 }
 
 void CharacterWidget::mousePressEvent(QMouseEvent *event)

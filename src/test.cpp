@@ -6,12 +6,14 @@
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
-    FontViewer viewer;
 
+    FontViewer viewer;
     auto p      = std::make_unique<ViewOptions>();
     p->d->dpr   = 1;
     p->d->theme = 1;
-    p->d->path  = "C:/D/1.ttf";
+    p->d->path  = "C:/D/2.ttf";
+    // p->d->path  = "C:/D/1.woff2";
+    // p->d->path  = "C:/D/1.eot";
     p->d->type  = viewer.name();
     viewer.setWindowTitle(p->d->path);
     viewer.load(nullptr, std::move(p));

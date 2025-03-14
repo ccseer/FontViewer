@@ -1,11 +1,11 @@
 QT       += core gui widgets
-
-# TEMPLATE = lib
-# CONFIG += plugin
-SOURCES += test.cpp
-
+TARGET  = fontviewer
 CONFIG += c++17
 
+TEMPLATE = lib
+CONFIG += plugin
+TARGET_EXT = .dll
+# SOURCES += test.cpp
 
 SOURCES += \
     characterwidget.cpp \

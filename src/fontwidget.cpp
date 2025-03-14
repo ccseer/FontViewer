@@ -7,12 +7,12 @@
 #include <QFontInfo>
 #include <QPushButton>
 #include <QWheelEvent>
-#include <iostream>
 
 #include "characterwidget.h"
 #include "ui_fontwidget.h"
 
-#pragma comment(lib, "user32.lib")
+#define qprintt qDebug() << "[FontViewer]"
+
 constexpr auto g_def_sample
     = "It is the time you have wasted for your rose that makes your "
       "rose so important.";
@@ -33,11 +33,14 @@ FontWidget::~FontWidget()
     delete ui;
 }
 
-void FontWidget::initUI(const QStringList &names)
+void FontWidget::initUI(const QStringList &names_raw)
 {
     /// widget_top
     // names
+    QStringList names = names_raw;
+    names.removeDuplicates();
     ui->comboBox_family->addItems(names);
+    ui->comboBox_family->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     if (names.size() == 1) {
         ui->comboBox_family->setEnabled(false);
     }
@@ -74,6 +77,7 @@ void FontWidget::initUI(const QStringList &names)
             &FontWidget::onTabChanged);
     // tab text
     ui->comboBox_text->setEditable(true);
+    ui->comboBox_text->addItem("");
     for (auto i : g_samples) {
         ui->comboBox_text->addItem(i);
     }
@@ -101,20 +105,17 @@ bool FontWidget::init(const QString &p)
 {
     const auto ft_id = QFontDatabase::addApplicationFont(p);
     if (-1 == ft_id) {
-        std::cout << "addApplicationFont err" << std::endl;
+        qprintt << "addApplicationFont err";
         return false;
     }
     const QStringList names = QFontDatabase::applicationFontFamilies(ft_id);
     if (names.isEmpty()) {
-        std::cout << "applicationFontFamilies err" << std::endl;
+        qprintt << "applicationFontFamilies err";
         return false;
     }
     initUI(names);
     // init data after initUI
     m_wnd_char->init(p);
-
-    // visible before sending Read msg
-    show();
 
     onTabChanged();
     onNameChanged();
@@ -256,7 +257,9 @@ void FontWidget::updateTabTextPreview()
     const auto style = ui->comboBox_style->currentText();
     // doesn't work: https://bugreports.qt.io/browse/QTBUG-69499
     // ft.setStyleName(ui->comboBox_style->currentText());
-    ft.setWeight((QFont::Weight)QFontDatabase::weight(name, style));
+    if (auto weight = QFontDatabase::weight(name, style); weight != -1) {
+        ft.setWeight((QFont::Weight)weight);
+    }
     // there are things like Demi-Italic exists, but we can't support these
     ft.setItalic(QFontDatabase::italic(name, style));
 
@@ -325,24 +328,31 @@ void FontWidget::updateDPR(qreal r)
     ft.setPixelSize(r * 12);
     // ft.setPointSize(12);
     this->setFont(ft);
-
-    std::cout << "dpi changed " << r << std::endl;
 }
 
-// void Viewer::onThemeChanged(int theme)
-// {
-//     auto pal = qApp->palette(this);
-//     /// light
-//     if (theme == 0) {
-//         ui->scrollAreaWidgetContents->setStyleSheet("");
-//         pal.setColor(QPalette::Window, "white");
-//         pal.setColor(QPalette::WindowText, "#333333");
-//         this->setPalette(pal);
-//         return;
-//     }
-//     /// dark
-//     // need to use qss to set tab color
-//     // maybe next time
-//     ui->scrollAreaWidgetContents->setStyleSheet(
-//         "background:white; color: #333;");
-// }
+void FontWidget::setCurrentText(const QString &t)
+{
+    if (t.isEmpty()) {
+        return;
+    }
+    ui->comboBox_text->setCurrentText(t);
+}
+
+QString FontWidget::getCurrentText() const
+{
+    return ui->comboBox_text->currentText();
+}
+
+void FontWidget::setCurrentFontSize(int s)
+{
+    auto index = ui->comboBox_sz->findText(QString::number(s));
+    if (index == -1) {
+        return;
+    }
+    ui->comboBox_sz->setCurrentIndex(index);
+}
+
+int FontWidget::getCurrentFontSize() const
+{
+    return ui->comboBox_sz->currentText().toInt();
+}

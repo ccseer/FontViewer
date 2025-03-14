@@ -9,12 +9,3 @@ A plugin for Seer Pro
 ![](res/2022-09-30-17-34-24.png)
 
 ![](res/2022-09-30-17-34-35.png)
-
-
-
-## TODO:
- 
-1. add a local file text as user defined ini, custom default font
-    size and display string
-2. font type: `.woff` `.woff2` `.eot` 
-3. variable font

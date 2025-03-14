@@ -17,8 +17,13 @@ public:
     ~FontWidget();
 
     bool init(const QString &p);
-    void copy();
     void updateDPR(qreal r);
+    void copy();
+
+    void setCurrentText(const QString &t);
+    QString getCurrentText() const;
+    void setCurrentFontSize(int s);
+    int getCurrentFontSize() const;
 
 protected:
     virtual bool eventFilter(QObject *watched, QEvent *event) override;
