@@ -1,23 +1,27 @@
 QT       += core gui widgets
 
-CONFIG += c++11
+# TEMPLATE = lib
+# CONFIG += plugin
+SOURCES += test.cpp
+
+CONFIG += c++17
+
 
 SOURCES += \
     characterwidget.cpp \
-    main.cpp \
-    mainwindow.cpp
-
+    fontviewer.cpp \
+    fontwidget.cpp
 HEADERS += \
     characterwidget.h \
-    mainwindow.h
-
+    fontviewer.h \
+    fontwidget.h
 FORMS += \
-    mainwindow.ui
+    fontwidget.ui
+include(sdk.pri)
 
-INCLUDEPATH += ../
-HEADERS += ../oitvar.h
+DISTFILES += fontviewer.json
 
-VERSION = 1.1.0
+VERSION = 1.2.0
 QMAKE_TARGET_COMPANY = "1218.io"
 QMAKE_TARGET_PRODUCT = "Seer"
 QMAKE_TARGET_DESCRIPTION = "Seer - A Windows Quick Look Tool"
