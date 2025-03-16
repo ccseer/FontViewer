@@ -5,7 +5,9 @@
 #include <QClipboard>
 #include <QFont>
 #include <QFontInfo>
+#include <QListView>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QWheelEvent>
 
 #include "characterwidget.h"
@@ -16,10 +18,12 @@
 constexpr auto g_def_sample
     = "It is the time you have wasted for your rose that makes your "
       "rose so important.";
-constexpr const char *g_samples[]
-    = {"The quick brown fox jumps over the lazy dog.",
-       "Waltz, bad nymph, for quick jigs vex.",
-       "How vexingly quick daft zebras jump!", "123456789 ~!@#$%^&*()-="};
+constexpr const char *g_samples[] = {
+    "The quick brown fox jumps over the lazy dog.",  // 1
+    "Waltz, bad nymph, for quick jigs vex.",         // 2
+    "How vexingly quick daft zebras jump!",          // 3
+    "123456789 ~!@#$%^&*()-="                        // 4
+};
 constexpr auto g_def_pt = 16;
 
 FontWidget::FontWidget(QWidget *parent)
@@ -59,6 +63,10 @@ void FontWidget::initUI(const QStringList &names_raw)
     if (all_sz.contains(g_def_pt)) {
         ui->comboBox_sz->setCurrentText(QString::number(g_def_pt));
     }
+    auto list = new QListView(ui->comboBox_sz);
+    list->setResizeMode(QListView::Adjust);
+    list->verticalScrollBar()->setProperty("is_readonly", true);
+    ui->comboBox_sz->setView(list);
     connect(ui->comboBox_sz, &QComboBox::currentTextChanged, this,
             &FontWidget::updateTabTextPreview);
     // info
@@ -324,10 +332,10 @@ bool FontWidget::eventFilter(QObject *watched, QEvent *event)
 
 void FontWidget::updateDPR(qreal r)
 {
-    auto ft = qApp->font();
-    ft.setPixelSize(r * 12);
-    // ft.setPointSize(12);
-    this->setFont(ft);
+    // auto ft = qApp->font();
+    // ft.setPixelSize(r * 12);
+    // // ft.setPointSize(12);
+    // this->setFont(ft);
 }
 
 void FontWidget::setCurrentText(const QString &t)
