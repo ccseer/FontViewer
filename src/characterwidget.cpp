@@ -79,15 +79,16 @@ QPixmap CharacterWidget::getSelectedCharPix()
     if (m_last_key == 0) {
         return {};
     }
+    const auto &pal = palette();
 
     const QRect rt(0, 0, m_sz_square, m_sz_square);
     QPixmap pix(rt.size());
+    pix.fill(pal.base().color());
     QPainter p(&pix);
     p.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
-    p.fillRect(rt, QBrush(Qt::white));
     p.setFont(m_ft);
-    p.setPen(QPen(Qt::black));
-    p.drawText(rt, Qt::AlignCenter, QString(QChar(m_last_key)));
+    p.setPen(QPen(pal.text().color()));
+    p.drawText(rt, Qt::AlignCenter, QChar(m_last_key));
     return pix;
 }
 
@@ -146,7 +147,8 @@ void CharacterWidget::paintEvent(QPaintEvent *event)
         return;
     }
     QPainter painter(this);
-    painter.fillRect(event->rect(), QBrush(Qt::white));
+    const auto &p = palette();
+    painter.fillRect(event->rect(), p.base());
     painter.setFont(m_ft);
 
     const QRect rt_redraw = event->rect();
@@ -165,19 +167,17 @@ void CharacterWidget::paintEvent(QPaintEvent *event)
             }
             const ushort key = m_char_indexes[index];
 
-            painter.setPen(QPen(Qt::black));
             painter.setClipRect(col * m_sz_square, row * m_sz_square,
                                 m_sz_square, m_sz_square);
 
             if (key == m_last_key) {
                 painter.fillRect(col * m_sz_square + 1, row * m_sz_square + 1,
-                                 m_sz_square, m_sz_square, QBrush("#cde8ff"));
+                                 m_sz_square, m_sz_square, p.accent());
             }
 
             painter.drawText(col * m_sz_square + (m_sz_square / 2)
                                  - fm.horizontalAdvance(QChar(key)) / 2,
-                             row * m_sz_square + 4 + fm.ascent(),
-                             QString(QChar(key)));
+                             row * m_sz_square + 4 + fm.ascent(), QChar(key));
         }
     }
 }
