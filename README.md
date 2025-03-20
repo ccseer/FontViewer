@@ -17,7 +17,7 @@ To build and run FontViewer:
    ```bash
    git clone --recursive https://github.com/ccseer/FontViewer.git
    ```
-2. **Open `JsonTreeViewer.pro`**
+2. **Open `FontViewer.pro`**
    - ```bash
         # TEMPLATE = lib
         # CONFIG += plugin
@@ -27,7 +27,7 @@ To build and run FontViewer:
    - Build as exe
 3. **Open the Project**
 
-    Open JsonTreeViewer.pro with your preferred Qt development environment.
+    Open FontViewer.pro with your preferred Qt development environment.
 
 4. **Build and Run**
 
