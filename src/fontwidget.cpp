@@ -6,6 +6,7 @@
 #include <QFont>
 #include <QFontInfo>
 #include <QListView>
+#include <QPainter>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QWheelEvent>
@@ -241,7 +242,12 @@ void FontWidget::copy()
     QPixmap pix;
     if (ui->tabWidget->currentWidget() == ui->tab_text
         || ui->tabWidget->currentWidget() == ui->tab_sample) {
-        pix = ui->label_preview->grab();
+        // pix = ui->label_preview->grab();
+        pix = QPixmap(ui->label_preview->size());
+        pix.fill(ui->label_preview->palette().base().color());
+        QPainter painter(&pix);
+        ui->label_preview->render(&painter);
+        painter.end();
     }
     else {
         // takes too long
