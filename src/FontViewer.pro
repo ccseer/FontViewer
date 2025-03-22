@@ -11,12 +11,15 @@ SOURCES += \
     characterwidget.cpp \
     fontviewer.cpp \
     fontwidget.cpp
+
 HEADERS += \
     characterwidget.h \
     fontviewer.h \
     fontwidget.h
+    
 FORMS += \
     fontwidget.ui
+
 include(sdk.pri)
 
 DISTFILES += fontviewer.json

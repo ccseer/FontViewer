@@ -4,7 +4,7 @@
 
 #include <QClipboard>
 #include <QFont>
-#include <QFontInfo>
+#include <QFontDatabase>
 #include <QListView>
 #include <QPainter>
 #include <QPushButton>
@@ -31,11 +31,13 @@ FontWidget::FontWidget(QWidget *parent)
     : QWidget(parent), m_wnd_char(nullptr), ui(new Ui::FontWidget)
 {
     ui->setupUi(this);
+    qprintt << this;
 }
 
 FontWidget::~FontWidget()
 {
     delete ui;
+    qprintt << "~" << this;
 }
 
 void FontWidget::initUI(const QStringList &names_raw)
@@ -51,6 +53,11 @@ void FontWidget::initUI(const QStringList &names_raw)
     }
     connect(ui->comboBox_family, &QComboBox::currentTextChanged, this,
             &FontWidget::onNameChanged);
+    auto list = new QListView(ui->comboBox_family);
+    list->setResizeMode(QListView::Adjust);
+    list->verticalScrollBar()->setProperty("is_readonly", true);
+    list->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
+    ui->comboBox_family->setView(list);
     // style
     ui->comboBox_style->addItems(
         QFontDatabase::styles(ui->comboBox_family->currentText()));
@@ -64,7 +71,7 @@ void FontWidget::initUI(const QStringList &names_raw)
     if (all_sz.contains(g_def_pt)) {
         ui->comboBox_sz->setCurrentText(QString::number(g_def_pt));
     }
-    auto list = new QListView(ui->comboBox_sz);
+    list = new QListView(ui->comboBox_sz);
     list->setResizeMode(QListView::Adjust);
     list->verticalScrollBar()->setProperty("is_readonly", true);
     ui->comboBox_sz->setView(list);
@@ -86,7 +93,7 @@ void FontWidget::initUI(const QStringList &names_raw)
             &FontWidget::onTabChanged);
     // tab text
     ui->comboBox_text->setEditable(true);
-    ui->comboBox_text->addItem("");
+    ui->comboBox_text->addItem({});
     for (auto i : g_samples) {
         ui->comboBox_text->addItem(i);
     }
@@ -102,8 +109,8 @@ void FontWidget::initUI(const QStringList &names_raw)
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_sample), "Sample");
 
     // tab char
-    auto wnd_char_sa = new QScrollArea;
-    m_wnd_char       = new CharacterWidget;
+    auto wnd_char_sa = new QScrollArea(this);
+    m_wnd_char       = new CharacterWidget(this);
     wnd_char_sa->setFrameShape(QFrame::NoFrame);
     wnd_char_sa->setWidget(m_wnd_char);
     ui->tabWidget->addTab(wnd_char_sa, "Characters");
@@ -250,11 +257,9 @@ void FontWidget::copy()
         painter.end();
     }
     else {
-        // takes too long
-        // pix = m_wnd_char->grab();
         pix = m_wnd_char->getSelectedCharPix();
         if (pix.isNull()) {
-            // sendMsg2Seer(SEER_OIT_SUB_WAGGLE, {});
+            qprintt << __FUNCTION__ << "pix.isNull";
         }
     }
     if (!pix.isNull()) {
@@ -336,11 +341,10 @@ bool FontWidget::eventFilter(QObject *watched, QEvent *event)
     return true;
 }
 
-void FontWidget::updateDPR(qreal r)
+void FontWidget::updateDPR(qreal)
 {
     // auto ft = qApp->font();
     // ft.setPixelSize(r * 12);
-    // // ft.setPointSize(12);
     // this->setFont(ft);
 }
 

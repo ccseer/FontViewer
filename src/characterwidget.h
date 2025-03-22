@@ -51,9 +51,6 @@
 #ifndef CHARACTERWIDGET_H
 #define CHARACTERWIDGET_H
 
-#include <QFont>
-#include <QSize>
-#include <QString>
 #include <QWidget>
 
 QT_BEGIN_NAMESPACE
@@ -85,7 +82,7 @@ protected:
 private:
     ushort getCharIndexAtPos(const QPoint &pt);
 
-    QList<ushort> m_char_indexes;
+    QVector<ushort> m_char_indexes;
     QFont m_ft;
     ushort m_last_key     = 0;
     uchar m_sz_square     = 0;

@@ -11,7 +11,7 @@ class FontViewer : public ViewerBase {
     Q_INTERFACES(ViewerBase)
 public:
     explicit FontViewer(QWidget *parent = nullptr);
-    ~FontViewer();
+    ~FontViewer() override;
 
     QString name() const override
     {

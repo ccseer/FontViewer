@@ -50,7 +50,6 @@
 
 #include "characterwidget.h"
 
-#include <QFontDatabase>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QRawFont>
@@ -64,8 +63,9 @@ CharacterWidget::CharacterWidget(QWidget *parent) : QWidget(parent)
 
 void CharacterWidget::init(const QString &path)
 {
-    const ushort max = 0xffff;
+    constexpr ushort max = 0xffff;
     const QRawFont rf(path, 12);
+    m_char_indexes.reserve(max);
     // cost less than 10ms when contains 30k chars
     for (auto i = 0; i < max; ++i) {
         if (rf.supportsCharacter(i)) {
@@ -120,13 +120,11 @@ ushort CharacterWidget::getCharIndexAtPos(const QPoint &pt)
 
 void CharacterWidget::mouseMoveEvent(QMouseEvent *event)
 {
-    ushort c = getCharIndexAtPos(event->pos());
-    QString text
-        = QString::fromLatin1(
-              "<p>Character: <span style=\"font-size: 24pt; font-family: %1\">")
-              .arg(m_ft.family())
-          + QChar(c) + QString::fromLatin1("</span><p>Value: 0x")
-          + QString::number(c, 16);
+    ushort c     = getCharIndexAtPos(event->pos());
+    QString text = QString(
+                       "<p>Character: <span style=\"font-size: 28pt; "
+                       "font-family: %1\">%2</span><p>Value: 0x%3")
+                       .arg(m_ft.family(), QChar(c), QString::number(c, 16));
     QToolTip::showText(event->globalPosition().toPoint(), text, this);
 }
 
@@ -143,7 +141,7 @@ void CharacterWidget::mousePressEvent(QMouseEvent *event)
 
 void CharacterWidget::paintEvent(QPaintEvent *event)
 {
-    if (!m_char_indexes.size()) {
+    if (m_char_indexes.empty()) {
         return;
     }
     QPainter painter(this);
@@ -157,27 +155,27 @@ void CharacterWidget::paintEvent(QPaintEvent *event)
     const int col_end     = rt_redraw.right() / m_sz_square;
     const ushort char_t   = getCharCount();
     const QFontMetrics fm(m_ft);
-    const QRawFont rawft = QRawFont::fromFont(m_ft);
     for (int row = rt_redraw.top() / m_sz_square; row <= row_end; ++row) {
         const int first_index_row = row * m_columns;
+        const int y               = row * m_sz_square;
         for (int col = col_begin; col <= col_end; ++col) {
             const auto index = first_index_row + col;
             if (index >= char_t) {
                 return;
             }
+            const int x      = col * m_sz_square;
             const ushort key = m_char_indexes[index];
 
-            painter.setClipRect(col * m_sz_square, row * m_sz_square,
-                                m_sz_square, m_sz_square);
+            painter.setClipRect(x, y, m_sz_square, m_sz_square);
 
             if (key == m_last_key) {
-                painter.fillRect(col * m_sz_square + 1, row * m_sz_square + 1,
-                                 m_sz_square, m_sz_square, p.accent());
+                painter.fillRect(x + 1, y + 1, m_sz_square, m_sz_square,
+                                 p.accent());
             }
 
-            painter.drawText(col * m_sz_square + (m_sz_square / 2)
-                                 - fm.horizontalAdvance(QChar(key)) / 2,
-                             row * m_sz_square + 4 + fm.ascent(), QChar(key));
+            painter.drawText(
+                x + (m_sz_square / 2) - fm.horizontalAdvance(QChar(key)) / 2,
+                y + 4 + fm.ascent(), QChar(key));
         }
     }
 }

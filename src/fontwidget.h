@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QFontDatabase>
 #include <QWidget>
 
 class CharacterWidget;
@@ -11,10 +10,9 @@ class FontWidget;
 
 class FontWidget : public QWidget {
     Q_OBJECT
-
 public:
     FontWidget(QWidget *parent = nullptr);
-    ~FontWidget();
+    ~FontWidget() override;
 
     bool init(const QString &p);
     void updateDPR(qreal r);
@@ -26,7 +24,7 @@ public:
     int getCurrentFontSize() const;
 
 protected:
-    virtual bool eventFilter(QObject *watched, QEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void initUI(const QStringList &names);
