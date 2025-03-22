@@ -42,6 +42,12 @@ FontWidget::~FontWidget()
 
 void FontWidget::initUI(const QStringList &names_raw)
 {
+    auto lamComboBoxView = [](QComboBox *cb) {
+        auto list = new QListView(cb);
+        list->setResizeMode(QListView::Adjust);
+        list->verticalScrollBar()->setProperty("is_readonly", true);
+        cb->setView(list);
+    };
     /// widget_top
     // names
     QStringList names = names_raw;
@@ -51,18 +57,15 @@ void FontWidget::initUI(const QStringList &names_raw)
     if (names.size() == 1) {
         ui->comboBox_family->setEnabled(false);
     }
+    lamComboBoxView(ui->comboBox_family);
     connect(ui->comboBox_family, &QComboBox::currentTextChanged, this,
             &FontWidget::onNameChanged);
-    auto list = new QListView(ui->comboBox_family);
-    list->setResizeMode(QListView::Adjust);
-    list->verticalScrollBar()->setProperty("is_readonly", true);
-    list->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
-    ui->comboBox_family->setView(list);
     // style
     ui->comboBox_style->addItems(
         QFontDatabase::styles(ui->comboBox_family->currentText()));
     connect(ui->comboBox_style, &QComboBox::currentTextChanged, this,
             &FontWidget::onStyleChanged);
+    lamComboBoxView(ui->comboBox_style);
     // sz
     const auto all_sz = QFontDatabase::standardSizes();
     for (auto i : all_sz) {
@@ -71,12 +74,9 @@ void FontWidget::initUI(const QStringList &names_raw)
     if (all_sz.contains(g_def_pt)) {
         ui->comboBox_sz->setCurrentText(QString::number(g_def_pt));
     }
-    list = new QListView(ui->comboBox_sz);
-    list->setResizeMode(QListView::Adjust);
-    list->verticalScrollBar()->setProperty("is_readonly", true);
-    ui->comboBox_sz->setView(list);
     connect(ui->comboBox_sz, &QComboBox::currentTextChanged, this,
             &FontWidget::updateTabTextPreview);
+    lamComboBoxView(ui->comboBox_sz);
     // info
     // breaks the layout!!!
     // ui->label_info->setWordWrap(true);
@@ -102,6 +102,7 @@ void FontWidget::initUI(const QStringList &names_raw)
     ui->comboBox_text->setPlaceholderText(g_def_sample);
     connect(ui->comboBox_text, &QComboBox::currentTextChanged, this,
             &FontWidget::updateTabTextPreview);
+    lamComboBoxView(ui->comboBox_text);
     ui->scrollArea_text->setFrameShape(QFrame::NoFrame);
     ui->label_preview->setWordWrap(true);
     ui->label_preview->installEventFilter(this);
