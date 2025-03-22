@@ -78,7 +78,8 @@ void FontWidget::initUI(const QStringList &names_raw)
     connect(ui->comboBox_sz, &QComboBox::currentTextChanged, this,
             &FontWidget::updateTabTextPreview);
     // info
-    ui->label_info->setWordWrap(true);
+    // breaks the layout!!!
+    // ui->label_info->setWordWrap(true);
     ui->label_info->setAlignment(Qt::AlignCenter);
 
     /// tab wnd
