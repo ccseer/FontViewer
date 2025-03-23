@@ -41,17 +41,25 @@ void FontViewer::updateDPR(qreal r)
     m_view->updateDPR(r);
 }
 
+QString FontViewer::getDLLPath()
+{
+    MEMORY_BASIC_INFORMATION mbi = {};
+    VirtualQuery((void *)getDLLPath, &mbi, sizeof(mbi));
+    HMODULE hm = (HMODULE)mbi.AllocationBase;
+
+    QString dir;
+    TCHAR path[MAX_PATH] = {};
+    if (hm && GetModuleFileName(hm, path, MAX_PATH)) {
+        dir = QString::fromWCharArray(path);
+        dir = QFileInfo(dir).absoluteDir().absolutePath();
+    }
+    return dir;
+}
+
 QString FontViewer::getIniPath() const
 {
     const QString filename = name() % ".ini";
-    QString dir;
-    if (auto h = GetModuleHandle(NULL)) {
-        TCHAR path[MAX_PATH];
-        if (GetModuleFileName(h, path, MAX_PATH)) {
-            dir = QString::fromWCharArray(path);
-            dir = QFileInfo(dir).absoluteDir().absolutePath();
-        }
-    }
+    QString dir            = getDLLPath();
     if (dir.isEmpty()) {
         dir = QCoreApplication::applicationDirPath();
     }

@@ -21,6 +21,8 @@ public:
     void onCopyTriggered() override;
     void updateDPR(qreal) override;
 
+    static QString getDLLPath();
+
 protected:
     void loadImpl(QBoxLayout *layout_content,
                   QHBoxLayout *layout_control_bar) override;
