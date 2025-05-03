@@ -12,7 +12,7 @@ int main(int argc, char *argv[])
     p->d->dpr   = 1;
     p->d->theme = 1;
     p->d->path  = "C:/D/2.ttf";
-    // p->d->path  = "C:/D/1.woff2";
+    p->d->path  = "D:/2.ttf";
     // p->d->path  = "C:/D/1.eot";
     p->d->type  = viewer.name();
     viewer.setWindowTitle(p->d->path);

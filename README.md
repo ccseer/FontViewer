@@ -40,3 +40,7 @@ To build and run FontViewer:
 ## Seer Plugin
 
 Developed as a DLL plugin for Seer 4.0.0
+
+
+## TODO:
+- filter Space key for combobox
