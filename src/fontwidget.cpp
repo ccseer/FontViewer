@@ -16,6 +16,7 @@
 
 #define qprintt qDebug() << "[FontViewer]"
 
+namespace {
 constexpr auto g_def_sample
     = "It is the time you have wasted for your rose that makes your "
       "rose so important.";
@@ -26,6 +27,7 @@ constexpr const char *g_samples[] = {
     "123456789 ~!@#$%^&*()-="                        // 4
 };
 constexpr auto g_def_pt = 16;
+}  // namespace
 
 FontWidget::FontWidget(QWidget *parent)
     : QWidget(parent), m_wnd_char(nullptr), ui(new Ui::FontWidget)

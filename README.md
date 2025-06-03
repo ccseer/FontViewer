@@ -45,3 +45,4 @@ Developed as a DLL plugin for Seer 4.0.0
 ## TODO:
 - filter Space key for combobox
 - read size from json config
+- control bar needs a spacer 
