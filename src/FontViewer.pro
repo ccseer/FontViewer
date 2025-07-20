@@ -22,9 +22,9 @@ FORMS += \
 
 include(sdk.pri)
 
-DISTFILES += fontviewer.json
+DISTFILES += ../bin/plugin.json
 
-VERSION = 1.2.0
+VERSION = 1.2.1
 QMAKE_TARGET_COMPANY = "1218.io"
 QMAKE_TARGET_PRODUCT = "Seer"
 QMAKE_TARGET_DESCRIPTION = "Seer - A Windows Quick Look Tool"

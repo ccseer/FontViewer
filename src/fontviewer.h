@@ -7,8 +7,6 @@ class QSettings;
 
 class FontViewer : public ViewerBase {
     Q_OBJECT
-    Q_PLUGIN_METADATA(IID ViewerBase_iid FILE "fontviewer.json")
-    Q_INTERFACES(ViewerBase)
 public:
     explicit FontViewer(QWidget *parent = nullptr);
     ~FontViewer() override;
@@ -21,8 +19,6 @@ public:
     void onCopyTriggered() override;
     void updateDPR(qreal) override;
 
-    static QString getDLLPath();
-
 protected:
     void loadImpl(QBoxLayout *layout_content,
                   QHBoxLayout *layout_control_bar) override;
@@ -30,4 +26,16 @@ protected:
 
     QSettings *m_ini;
     FontWidget *m_view;
+};
+
+/////////////////////////////////////////////////////////////////
+class FontPlugin : public QObject, public ViewerPluginInterface {
+    Q_OBJECT
+    Q_PLUGIN_METADATA(IID ViewerPluginInterface_iid FILE "../bin/plugin.json")
+    Q_INTERFACES(ViewerPluginInterface)
+public:
+    ViewerBase *createViewer(QWidget *parent = nullptr) override
+    {
+        return new FontViewer(parent);
+    }
 };

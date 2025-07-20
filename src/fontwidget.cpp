@@ -9,6 +9,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QShortcut>
 #include <QWheelEvent>
 
 #include "characterwidget.h"
@@ -44,11 +45,16 @@ FontWidget::~FontWidget()
 
 void FontWidget::initUI(const QStringList &names_raw)
 {
-    auto lamComboBoxView = [](QComboBox *cb) {
+    auto lamComboBoxView = [this](QComboBox *cb) {
         auto list = new QListView(cb);
         list->setResizeMode(QListView::Adjust);
         list->verticalScrollBar()->setProperty("is_readonly", true);
         cb->setView(list);
+        if (cb != ui->comboBox_text) {
+            // filter Space key for combobox
+            auto sc = new QShortcut(Qt::Key_Space, cb);
+            sc->setContext(Qt::WidgetShortcut);
+        }
     };
     /// widget_top
     // names
