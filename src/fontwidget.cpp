@@ -53,18 +53,18 @@ constexpr auto g_svg_save_svg = R"SVG(
   <line x1="12" y1="15" x2="12" y2="3"/>
 </svg>)SVG";
 
-QIcon svgIcon(const char *svg_data, const QColor &color)
+QIcon svgIcon(const char *svg_data, const QColor &color, qreal dpr)
 {
-    // replace "currentColor" with the actual color string
     QByteArray data(svg_data);
     data.replace("currentColor", color.name(QColor::HexRgb).toUtf8());
 
-    const int sz = 20;
-    QPixmap pix(sz, sz);
+    constexpr int icon_sz = 18;
+    QPixmap pix(QSize(icon_sz, icon_sz) * dpr);
+    pix.setDevicePixelRatio(dpr);
     pix.fill(Qt::transparent);
     QPainter p(&pix);
     QSvgRenderer renderer(data);
-    renderer.render(&p);
+    renderer.render(&p, QRectF(0, 0, icon_sz, icon_sz));
     return QIcon(pix);
 }
 
@@ -78,9 +78,9 @@ QPushButton *makeIconButton(const char *svg_data,
     btn->setToolTip(tooltip);
     btn->setCursor(Qt::PointingHandCursor);
 
-    // use the widget's text/foreground colour for the icon stroke
-    const QColor fg = parent->palette().color(QPalette::WindowText);
-    btn->setIcon(svgIcon(svg_data, fg));
+    const QColor fg  = parent->palette().color(QPalette::WindowText);
+    const qreal  dpr = parent->devicePixelRatioF();
+    btn->setIcon(svgIcon(svg_data, fg, dpr));
     btn->setIconSize(QSize(18, 18));
     return btn;
 }
