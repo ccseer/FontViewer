@@ -1,4 +1,4 @@
-#include "fontviewer.h"
+﻿#include "fontviewer.h"
 
 #include <qt_windows.h>
 
@@ -8,11 +8,12 @@
 #include <QSettings>
 
 #include "fontwidget.h"
-#include "seer/viewer_helper.h"
+#include "seer/viewerhelper.h"
 
 namespace {
 constexpr auto g_ini_user_text = "user_text";
 constexpr auto g_ini_font_size = "font_size";
+constexpr auto g_property_key_cmd = "plugin_cmd";
 }  // namespace
 
 FontViewer::FontViewer(QWidget *parent)
@@ -30,8 +31,8 @@ FontViewer::~FontViewer()
 
 QSize FontViewer::getContentSize() const
 {
-    const auto sz_def = m_d->d->dpr * QSize(850, 800);
-    auto cmd          = property(g_property_key_cmd).toStringList();
+    const auto sz_def = options()->dpr() * QSize(850, 800);
+    auto cmd          = options()->property(g_property_key_cmd).toStringList();
     if (!cmd.isEmpty()) {
         auto parsed = seer::parseViewerSizeFromConfig(cmd);
         qDebug() << "getContentSize: parsed" << parsed << cmd;
@@ -49,7 +50,6 @@ void FontViewer::onCopyTriggered()
 
 void FontViewer::updateDPR(qreal r)
 {
-    m_d->d->dpr = r;
     m_view->updateDPR(r);
 }
 
@@ -75,16 +75,16 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
     }
     m_view = new FontWidget(this);
     layout_content->addWidget(m_view);
-    if (!m_view->init(m_d->d->path)) {
-        emit sigCommand(ViewCommandType::VCT_StateChange, VCV_Error);
+    if (!m_view->init(options()->path())) {
+        emit sigCommand(VCT_StateChange, VCV_Error);
         return;
     }
     m_ini = new QSettings(getIniPath(), QSettings::IniFormat, this);
     m_view->setCurrentText(m_ini->value(g_ini_user_text).toString());
     m_view->setCurrentFontSize(m_ini->value(g_ini_font_size).toInt());
 
-    updateTheme(m_d->d->theme);
-    updateDPR(m_d->d->dpr);
+    updateTheme(options()->theme());
+    updateDPR(options()->dpr());
 
-    emit sigCommand(ViewCommandType::VCT_StateChange, VCV_Loaded);
+    emit sigCommand(VCT_StateChange, VCV_Loaded);
 }

@@ -52,3 +52,7 @@ compile_commands.json
 *creator.user*
 
 .vscode/*
+.vs
+src/out
+src/CMakeUserPresets.json
+src/CMakePresets.json
