@@ -17,6 +17,7 @@ public:
     }
     QSize getContentSize() const override;
     void onCopyTriggered() override;
+    void loadFileInfo() override;
     void updateDPR(qreal) override;
 
 protected:

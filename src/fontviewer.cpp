@@ -5,9 +5,11 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QPair>
 #include <QSettings>
 
 #include "fontwidget.h"
+#include "fontinfo.h"
 #include "seer/viewerhelper.h"
 
 namespace {
@@ -87,4 +89,19 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
     updateDPR(options()->dpr());
 
     emit sigCommand(VCT_StateChange, VCV_Loaded);
+}
+
+void FontViewer::loadFileInfo()
+{
+    const auto records = readFontNameTable(options()->path());
+    if (records.isEmpty()) {
+        return;
+    }
+    QVector<QPair<QString, QString>> props;
+    props.reserve(records.size());
+    for (const auto &r : records) {
+        qDebug() << "[FontInfo]" << r.label << r.value;
+        props.append({r.label, r.value});
+    }
+    emit sigCommand(VCT_AppendProperty, QVariant::fromValue(props));
 }

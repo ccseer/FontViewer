@@ -1,5 +1,5 @@
-﻿#include <QApplication>
-#include <QFile>
+#include <QApplication>
+#include <QFileDialog>
 
 #include "fontviewer.h"
 
@@ -7,15 +7,30 @@ int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
 
+    QString path;
+    if (argc > 1) {
+        path = QString::fromLocal8Bit(argv[1]);
+    } else {
+        path = QFileDialog::getOpenFileName(
+            nullptr, "Open Font", {},
+            "Font Files (*.ttf *.otf *.otc *.ttc)");
+    }
+    if (path.isEmpty()) {
+        return 0;
+    }
+
+    ViewOptionsPrivate d;
+    d.dpr         = 1;
+    d.theme       = 0;
+    d.path        = path;
+    d.viewer_type = "fontviewer";
+
+    ViewOptions opts;
+    opts.d_ptr = &d;
+
     FontViewer viewer;
-    auto p = new ViewOptions();
-    p->d_ptr = new ViewOptionsPrivate();
-    p->d_ptr->dpr   = 1;
-    p->d_ptr->theme = 1;
-    p->d_ptr->path  = "D:/2.ttf";
-    p->d_ptr->viewer_type = viewer.name();
-    viewer.setWindowTitle(p->d_ptr->path);
-    viewer.load(nullptr, p);
+    viewer.setWindowTitle(path);
+    viewer.load(nullptr, &opts);
     viewer.resize(viewer.getContentSize());
     viewer.show();
     return a.exec();
