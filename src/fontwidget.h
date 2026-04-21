@@ -3,6 +3,7 @@
 #include <QWidget>
 
 class CharacterWidget;
+class QPushButton;
 
 namespace Ui {
 class FontWidget;
@@ -16,6 +17,7 @@ public:
 
     bool init(const QString &p);
     void updateDPR(qreal r);
+    void updateTheme(int theme);
     void copy();
     void saveAsSvg();
 
@@ -38,5 +40,8 @@ private:
     void onTabChanged();
 
     CharacterWidget *m_wnd_char;
-    Ui::FontWidget *ui;
+    Ui::FontWidget  *ui;
+    QPushButton     *m_btn_copy = nullptr;
+    QPushButton     *m_btn_svg  = nullptr;
+    int              m_theme    = 0;
 };

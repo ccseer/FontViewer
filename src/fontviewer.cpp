@@ -14,9 +14,8 @@
 #define qprintt qDebug() << "[FontViewer]"
 
 namespace {
-constexpr auto g_ini_user_text    = "user_text";
-constexpr auto g_ini_font_size    = "font_size";
-constexpr auto g_property_key_cmd = "plugin_cmd";
+constexpr auto g_ini_user_text = "user_text";
+constexpr auto g_ini_font_size = "font_size";
 }  // namespace
 
 FontViewer::FontViewer(QWidget *parent)
@@ -35,7 +34,8 @@ FontViewer::~FontViewer()
 QSize FontViewer::getContentSize() const
 {
     const auto sz_def = options()->dpr() * QSize(850, 800);
-    auto cmd          = options()->property(g_property_key_cmd).toStringList();
+    auto cmd
+        = options()->property(ViewOptionsKeys::kKeyPluginCmd).toStringList();
     if (!cmd.isEmpty()) {
         auto parsed = seer::parseViewerSizeFromConfig(cmd);
         qprintt << "getContentSize: parsed" << parsed << cmd;
@@ -54,6 +54,13 @@ void FontViewer::onCopyTriggered()
 void FontViewer::updateDPR(qreal r)
 {
     m_view->updateDPR(r);
+}
+
+void FontViewer::updateTheme(int theme)
+{
+    if (m_view) {
+        m_view->updateTheme(theme);
+    }
 }
 
 QString FontViewer::getIniPath() const

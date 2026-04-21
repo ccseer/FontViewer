@@ -19,6 +19,7 @@ public:
     void onCopyTriggered() override;
     void loadFileInfo() override;
     void updateDPR(qreal) override;
+    void updateTheme(int) override;
 
 protected:
     void loadImpl(QBoxLayout *layout_content,

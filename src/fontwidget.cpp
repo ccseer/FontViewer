@@ -33,16 +33,13 @@ constexpr const char *g_samples[] = {
     "123456789 ~!@#$%^&*()-="                        // 4
 };
 constexpr auto g_def_pt = 16;
-}  // namespace
-
-namespace {
 
 // inline SVG icons — rendered at runtime, no external files
 constexpr auto g_svg_copy_image = R"SVG(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="9" y="2" width="13" height="13" rx="2"/>
-  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+  <rect x="8" y="8" width="13" height="13" rx="2"/>
+  <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>
 </svg>)SVG";
 
 constexpr auto g_svg_save_svg = R"SVG(
@@ -53,17 +50,25 @@ constexpr auto g_svg_save_svg = R"SVG(
   <line x1="12" y1="15" x2="12" y2="3"/>
 </svg>)SVG";
 
-QIcon svgIcon(const char *svg_data, const QColor &color, qreal dpr)
+QIcon svgIcon(const char *svg_data, bool dark_theme, qreal dpr)
 {
     QByteArray data(svg_data);
-    data.replace("currentColor", color.name(QColor::HexRgb).toUtf8());
+    // dark theme: use light icon; light theme: use dark icon
+    const QByteArray color = dark_theme ? "#e0e0e0" : "#303030";
+    data.replace("currentColor", color);
 
-    constexpr int icon_sz = 18;
-    QPixmap pix(QSize(icon_sz, icon_sz) * dpr);
+    QSvgRenderer renderer(data);
+    if (!renderer.isValid()) {
+        qprintt << "svgIcon: invalid SVG";
+        return {};
+    }
+
+    constexpr int icon_sz = 20;
+    const int phys        = qRound(icon_sz * dpr);
+    QPixmap pix(phys, phys);
     pix.setDevicePixelRatio(dpr);
     pix.fill(Qt::transparent);
     QPainter p(&pix);
-    QSvgRenderer renderer(data);
     renderer.render(&p, QRectF(0, 0, icon_sz, icon_sz));
     return QIcon(pix);
 }
@@ -74,14 +79,12 @@ QPushButton *makeIconButton(const char *svg_data,
 {
     auto *btn = new QPushButton(parent);
     btn->setFlat(true);
-    btn->setFixedSize(28, 28);
-    btn->setToolTip(tooltip);
     btn->setCursor(Qt::PointingHandCursor);
-
-    const QColor fg  = parent->palette().color(QPalette::WindowText);
-    const qreal  dpr = parent->devicePixelRatioF();
-    btn->setIcon(svgIcon(svg_data, fg, dpr));
-    btn->setIconSize(QSize(18, 18));
+    btn->setToolTip(tooltip);
+    // size scales with DPR
+    const int sz = qRound(32 * parent->devicePixelRatioF());
+    btn->setFixedSize(sz, sz);
+    btn->setIconSize(QSize(sz - 12, sz - 12));
     return btn;
 }
 
@@ -154,13 +157,13 @@ void FontWidget::initUI(const QStringList &names_raw)
     corner_lay->setContentsMargins(0, 0, 4, 0);
     corner_lay->setSpacing(2);
 
-    auto *btn_copy = makeIconButton(g_svg_copy_image, "Copy as Image", this);
-    auto *btn_svg  = makeIconButton(g_svg_save_svg, "Save as SVG", this);
-    connect(btn_copy, &QPushButton::clicked, this, &FontWidget::copy);
-    connect(btn_svg, &QPushButton::clicked, this, &FontWidget::saveAsSvg);
+    m_btn_copy = makeIconButton(g_svg_copy_image, "Copy as Image", this);
+    m_btn_svg  = makeIconButton(g_svg_save_svg, "Save as SVG", this);
+    connect(m_btn_copy, &QPushButton::clicked, this, &FontWidget::copy);
+    connect(m_btn_svg, &QPushButton::clicked, this, &FontWidget::saveAsSvg);
 
-    corner_lay->addWidget(btn_copy);
-    corner_lay->addWidget(btn_svg);
+    corner_lay->addWidget(m_btn_copy);
+    corner_lay->addWidget(m_btn_svg);
     ui->tabWidget->setCornerWidget(corner);
     connect(ui->tabWidget, &QTabWidget::currentChanged, this,
             &FontWidget::onTabChanged);
@@ -209,6 +212,7 @@ bool FontWidget::init(const QString &p)
 
     onTabChanged();
     onNameChanged();
+    updateTheme(m_theme);
     return true;
 }
 
@@ -447,6 +451,25 @@ void FontWidget::setCurrentFontSize(int s)
 int FontWidget::getCurrentFontSize() const
 {
     return ui->comboBox_sz->currentText().toInt();
+}
+
+void FontWidget::updateTheme(int theme)
+{
+    m_theme = theme;
+    if (!m_btn_copy || !m_btn_svg) {
+        return;
+    }
+    const bool dark = (theme == 1);
+    const qreal dpr = devicePixelRatioF();
+    const int sz    = qRound(32 * dpr);
+    auto icon_copy  = svgIcon(g_svg_copy_image, dark, dpr);
+    auto icon_svg   = svgIcon(g_svg_save_svg, dark, dpr);
+    m_btn_copy->setFixedSize(sz, sz);
+    m_btn_copy->setIconSize(QSize(sz - 12, sz - 12));
+    m_btn_copy->setIcon(icon_copy);
+    m_btn_svg->setFixedSize(sz, sz);
+    m_btn_svg->setIconSize(QSize(sz - 12, sz - 12));
+    m_btn_svg->setIcon(icon_svg);
 }
 
 void FontWidget::saveAsSvg()

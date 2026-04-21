@@ -56,4 +56,4 @@ compile_commands.json
 src/out
 src/CMakeUserPresets.json
 src/CMakePresets.json
-/bin/fontviewer.ini
+fontviewer.ini
