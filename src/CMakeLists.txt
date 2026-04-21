@@ -7,7 +7,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg)
 
 include(FetchContent)
 FetchContent_Declare(SeerSdk
@@ -31,6 +31,7 @@ target_link_libraries(fontviewer PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Svg
 )
 
 set_target_properties(fontviewer PROPERTIES
@@ -50,4 +51,5 @@ target_link_libraries(test_fontviewer PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Svg
 )

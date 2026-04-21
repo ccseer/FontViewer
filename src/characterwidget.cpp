@@ -179,3 +179,11 @@ void CharacterWidget::paintEvent(QPaintEvent *event)
         }
     }
 }
+
+CharacterWidget::SelectedCharInfo CharacterWidget::selectedCharInfo() const
+{
+    if (m_last_key == 0) {
+        return {};
+    }
+    return {QChar(m_last_key), m_ft, m_sz_square};
+}

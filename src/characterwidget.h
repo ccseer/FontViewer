@@ -70,6 +70,13 @@ public:
     }
     QPixmap getSelectedCharPix();
 
+    struct SelectedCharInfo {
+        QChar ch;
+        QFont font;
+        int   square_size = 0;
+    };
+    SelectedCharInfo selectedCharInfo() const;
+
 public slots:
     void updateFont(const QFont &font);
 

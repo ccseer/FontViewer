@@ -5,16 +5,17 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
-#include <QPair>
 #include <QSettings>
 
-#include "fontwidget.h"
 #include "fontinfo.h"
+#include "fontwidget.h"
 #include "seer/viewerhelper.h"
 
+#define qprintt qDebug() << "[FontViewer]"
+
 namespace {
-constexpr auto g_ini_user_text = "user_text";
-constexpr auto g_ini_font_size = "font_size";
+constexpr auto g_ini_user_text    = "user_text";
+constexpr auto g_ini_font_size    = "font_size";
 constexpr auto g_property_key_cmd = "plugin_cmd";
 }  // namespace
 
@@ -37,7 +38,7 @@ QSize FontViewer::getContentSize() const
     auto cmd          = options()->property(g_property_key_cmd).toStringList();
     if (!cmd.isEmpty()) {
         auto parsed = seer::parseViewerSizeFromConfig(cmd);
-        qDebug() << "getContentSize: parsed" << parsed << cmd;
+        qprintt << "getContentSize: parsed" << parsed << cmd;
         if (parsed.isValid()) {
             return parsed;
         }
@@ -77,6 +78,9 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
     }
     m_view = new FontWidget(this);
     layout_content->addWidget(m_view);
+    connect(m_view, &FontWidget::sigToast, this, [this](const QString &msg) {
+        emit sigCommand(VCT_ShowToastMsg, msg);
+    });
     if (!m_view->init(options()->path())) {
         emit sigCommand(VCT_StateChange, VCV_Error);
         return;
@@ -100,7 +104,7 @@ void FontViewer::loadFileInfo()
     QVector<QPair<QString, QString>> props;
     props.reserve(records.size());
     for (const auto &r : records) {
-        qDebug() << "[FontInfo]" << r.label << r.value;
+        qprintt << "font info:" << r.label << r.value;
         props.append({r.label, r.value});
     }
     emit sigCommand(VCT_AppendProperty, QVariant::fromValue(props));

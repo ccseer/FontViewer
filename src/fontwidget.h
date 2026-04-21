@@ -17,11 +17,14 @@ public:
     bool init(const QString &p);
     void updateDPR(qreal r);
     void copy();
+    void saveAsSvg();
 
     void setCurrentText(const QString &t);
     QString getCurrentText() const;
     void setCurrentFontSize(int s);
     int getCurrentFontSize() const;
+
+    Q_SIGNAL void sigToast(const QString &msg);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;

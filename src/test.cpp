@@ -10,10 +10,10 @@ int main(int argc, char *argv[])
     QString path;
     if (argc > 1) {
         path = QString::fromLocal8Bit(argv[1]);
-    } else {
+    }
+    else {
         path = QFileDialog::getOpenFileName(
-            nullptr, "Open Font", {},
-            "Font Files (*.ttf *.otf *.otc *.ttc)");
+            nullptr, "Open Font", {}, "Font Files (*.ttf *.otf *.otc *.ttc)");
     }
     if (path.isEmpty()) {
         return 0;

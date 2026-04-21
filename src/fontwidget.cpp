@@ -7,9 +7,14 @@
 #include <QFontDatabase>
 #include <QListView>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QShortcut>
+#include <QStandardPaths>
+#include <QSvgGenerator>
+#include <QSvgRenderer>
 #include <QWheelEvent>
 
 #include "characterwidget.h"
@@ -28,6 +33,58 @@ constexpr const char *g_samples[] = {
     "123456789 ~!@#$%^&*()-="                        // 4
 };
 constexpr auto g_def_pt = 16;
+}  // namespace
+
+namespace {
+
+// inline SVG icons — rendered at runtime, no external files
+constexpr auto g_svg_copy_image = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="9" y="2" width="13" height="13" rx="2"/>
+  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+</svg>)SVG";
+
+constexpr auto g_svg_save_svg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+  <polyline points="7 10 12 15 17 10"/>
+  <line x1="12" y1="15" x2="12" y2="3"/>
+</svg>)SVG";
+
+QIcon svgIcon(const char *svg_data, const QColor &color)
+{
+    // replace "currentColor" with the actual color string
+    QByteArray data(svg_data);
+    data.replace("currentColor", color.name(QColor::HexRgb).toUtf8());
+
+    const int sz = 20;
+    QPixmap pix(sz, sz);
+    pix.fill(Qt::transparent);
+    QPainter p(&pix);
+    QSvgRenderer renderer(data);
+    renderer.render(&p);
+    return QIcon(pix);
+}
+
+QPushButton *makeIconButton(const char *svg_data,
+                            const QString &tooltip,
+                            QWidget *parent)
+{
+    auto *btn = new QPushButton(parent);
+    btn->setFlat(true);
+    btn->setFixedSize(28, 28);
+    btn->setToolTip(tooltip);
+    btn->setCursor(Qt::PointingHandCursor);
+
+    // use the widget's text/foreground colour for the icon stroke
+    const QColor fg = parent->palette().color(QPalette::WindowText);
+    btn->setIcon(svgIcon(svg_data, fg));
+    btn->setIconSize(QSize(18, 18));
+    return btn;
+}
+
 }  // namespace
 
 FontWidget::FontWidget(QWidget *parent)
@@ -92,12 +149,19 @@ void FontWidget::initUI(const QStringList &names_raw)
 
     /// tab wnd
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_text), "Text");
-    QPushButton *btn_tab = new QPushButton(this);
-    btn_tab->setFlat(true);
-    btn_tab->setText("Copy as Image");
-    btn_tab->setCursor(Qt::PointingHandCursor);
-    connect(btn_tab, &QPushButton::clicked, this, &FontWidget::copy);
-    ui->tabWidget->setCornerWidget(btn_tab);
+    auto *corner     = new QWidget(this);
+    auto *corner_lay = new QHBoxLayout(corner);
+    corner_lay->setContentsMargins(0, 0, 4, 0);
+    corner_lay->setSpacing(2);
+
+    auto *btn_copy = makeIconButton(g_svg_copy_image, "Copy as Image", this);
+    auto *btn_svg  = makeIconButton(g_svg_save_svg, "Save as SVG", this);
+    connect(btn_copy, &QPushButton::clicked, this, &FontWidget::copy);
+    connect(btn_svg, &QPushButton::clicked, this, &FontWidget::saveAsSvg);
+
+    corner_lay->addWidget(btn_copy);
+    corner_lay->addWidget(btn_svg);
+    ui->tabWidget->setCornerWidget(corner);
     connect(ui->tabWidget, &QTabWidget::currentChanged, this,
             &FontWidget::onTabChanged);
     // tab text
@@ -383,4 +447,60 @@ void FontWidget::setCurrentFontSize(int s)
 int FontWidget::getCurrentFontSize() const
 {
     return ui->comboBox_sz->currentText().toInt();
+}
+
+void FontWidget::saveAsSvg()
+{
+    const bool is_char_tab
+        = ui->tabWidget->currentWidget() != ui->tab_text
+          && ui->tabWidget->currentWidget() != ui->tab_sample;
+
+    QSize sz;
+    std::function<void(QPainter &)> draw_fn;
+
+    if (!is_char_tab) {
+        sz      = ui->label_preview->size();
+        draw_fn = [this](QPainter &p) { ui->label_preview->render(&p); };
+    }
+    else {
+        const auto info = m_wnd_char->selectedCharInfo();
+        if (info.ch.isNull()) {
+            return;
+        }
+        const int side = qMax(64, info.square_size * 2);
+        sz             = QSize(side, side);
+        QFont ft       = info.font;
+        ft.setPointSize(side / 2);
+        draw_fn = [ch = info.ch, ft, side](QPainter &p) {
+            p.setRenderHints(QPainter::Antialiasing
+                             | QPainter::TextAntialiasing);
+            p.setFont(ft);
+            p.drawText(QRect(0, 0, side, side), Qt::AlignCenter, QString(ch));
+        };
+    }
+
+    const QString dir
+        = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    const QString family = ui->comboBox_family->currentText();
+    QString stem         = family;
+    if (is_char_tab) {
+        const auto info = m_wnd_char->selectedCharInfo();
+        stem += QString("_U+%1").arg(info.ch.unicode(), 4, 16, QChar('0'));
+    }
+    stem.replace(QRegularExpression(R"([\/:*?"<>|])"), "_");
+    const QString path = dir + "/" + stem + ".svg";
+
+    QSvgGenerator gen;
+    gen.setFileName(path);
+    gen.setSize(sz);
+    gen.setViewBox(QRect(QPoint(0, 0), sz));
+    gen.setTitle(family);
+
+    QPainter p(&gen);
+    draw_fn(p);
+    p.end();
+
+    QFontMetrics fm(this->font());
+    emit sigToast("Saved: "
+                  + fm.elidedText(path, Qt::ElideMiddle, this->width() * 0.7));
 }
