@@ -48,20 +48,21 @@ QString decodeNameRecord(const uchar *string_storage,
 {
     const uchar *src = string_storage + offset;
     // Platform 3 (Windows) encoding 1 = UTF-16 BE
-    if (platform_id == 3 && encoding_id == 1) {
-        return QString::fromUtf16(reinterpret_cast<const char16_t *>(src),
-                                  length / 2)
+    // Platform 0 (Unicode) = UTF-16 BE
+    if ((platform_id == 3 && encoding_id == 1) || platform_id == 0) {
+        // name table stores UTF-16 BE; byteswap to LE for QString
+        QByteArray buf(reinterpret_cast<const char *>(src), length);
+        for (int i = 0; i + 1 < buf.size(); i += 2) {
+            std::swap(buf[i], buf[i + 1]);
+        }
+        return QString::fromUtf16(
+                   reinterpret_cast<const char16_t *>(buf.constData()),
+                   buf.size() / 2)
             .trimmed();
     }
     // Platform 1 (Mac) encoding 0 = Mac Roman
     if (platform_id == 1 && encoding_id == 0) {
         return QString::fromLatin1(reinterpret_cast<const char *>(src), length)
-            .trimmed();
-    }
-    // Platform 0 (Unicode) — UTF-16 BE
-    if (platform_id == 0) {
-        return QString::fromUtf16(reinterpret_cast<const char16_t *>(src),
-                                  length / 2)
             .trimmed();
     }
     return {};
