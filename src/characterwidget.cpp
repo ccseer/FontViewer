@@ -136,6 +136,7 @@ void CharacterWidget::mousePressEvent(QMouseEvent *event)
     }
 
     m_last_key = getCharIndexAtPos(event->pos());
+    emit selectionChanged(QChar(m_last_key));
     update();
 }
 

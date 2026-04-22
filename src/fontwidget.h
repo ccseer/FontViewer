@@ -3,6 +3,7 @@
 #include <QWidget>
 
 class CharacterWidget;
+class GlyphInspectorWidget;
 class QPushButton;
 
 namespace Ui {
@@ -39,9 +40,15 @@ private:
     void onNameChanged();
     void onTabChanged();
 
-    CharacterWidget *m_wnd_char;
-    Ui::FontWidget  *ui;
-    QPushButton     *m_btn_copy = nullptr;
-    QPushButton     *m_btn_svg  = nullptr;
-    int              m_theme    = 0;
+    CharacterWidget *m_wnd_char                 = nullptr;
+    GlyphInspectorWidget *m_wnd_glyph_inspector = nullptr;
+    QWidget *m_tab_glyph_inspector              = nullptr;
+
+    QPushButton *m_btn_copy = nullptr;
+    QPushButton *m_btn_svg  = nullptr;
+
+    int m_theme = 0;
+    QString m_font_path;
+
+    Ui::FontWidget *ui;
 };

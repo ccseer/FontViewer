@@ -3,7 +3,6 @@
 #include <qt_windows.h>
 
 #include <QClipboard>
-#include <QFont>
 #include <QFontDatabase>
 #include <QListView>
 #include <QPainter>
@@ -18,6 +17,7 @@
 #include <QWheelEvent>
 
 #include "characterwidget.h"
+#include "glyphinspectorwidget.h"
 #include "ui_fontwidget.h"
 
 #define qprintt qDebug() << "[FontViewer]"
@@ -77,7 +77,7 @@ QPushButton *makeIconButton(const char *svg_data,
                             const QString &tooltip,
                             QWidget *parent)
 {
-    auto *btn = new QPushButton(parent);
+    auto btn = new QPushButton(parent);
     btn->setFlat(true);
     btn->setCursor(Qt::PointingHandCursor);
     btn->setToolTip(tooltip);
@@ -152,8 +152,8 @@ void FontWidget::initUI(const QStringList &names_raw)
 
     /// tab wnd
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_text), "Text");
-    auto *corner     = new QWidget(this);
-    auto *corner_lay = new QHBoxLayout(corner);
+    auto corner     = new QWidget(this);
+    auto corner_lay = new QHBoxLayout(corner);
     corner_lay->setContentsMargins(0, 0, 4, 0);
     corner_lay->setSpacing(2);
 
@@ -192,10 +192,50 @@ void FontWidget::initUI(const QStringList &names_raw)
     wnd_char_sa->setWidget(m_wnd_char);
     ui->tabWidget->addTab(wnd_char_sa, "Characters");
     m_wnd_char->installEventFilter(this);
+
+    // tab glyph inspector
+    auto wnd_glyph_sa     = new QScrollArea(this);
+    m_wnd_glyph_inspector = new GlyphInspectorWidget(this);
+    wnd_glyph_sa->setFrameShape(QFrame::NoFrame);
+    wnd_glyph_sa->setWidgetResizable(true);
+    wnd_glyph_sa->setWidget(m_wnd_glyph_inspector);
+    ui->tabWidget->addTab(wnd_glyph_sa, "Glyph Inspector");
+    m_tab_glyph_inspector = wnd_glyph_sa;
+
+    // Connect character selection to glyph inspector
+    connect(
+        m_wnd_char, &CharacterWidget::selectionChanged, this, [this](QChar ch) {
+            const auto name = ui->comboBox_family->currentText();
+            QFont ft(name);
+            ft.setPointSize(ui->comboBox_sz->currentText().toInt());
+            const auto style = ui->comboBox_style->currentText();
+            if (auto weight = QFontDatabase::weight(name, style);
+                weight != -1) {
+                ft.setWeight((QFont::Weight)weight);
+            }
+            ft.setItalic(QFontDatabase::italic(name, style));
+            m_wnd_glyph_inspector->updateGlyph(ch, ft, m_font_path);
+
+            // Update tab title with character code
+            int tab_index = ui->tabWidget->indexOf(m_tab_glyph_inspector);
+            if (tab_index != -1) {
+                if (ch.isNull()) {
+                    ui->tabWidget->setTabText(tab_index, "Glyph Inspector");
+                }
+                else {
+                    QString hex = QString("%1")
+                                      .arg(ch.unicode(), 4, 16, QChar('0'))
+                                      .toUpper();
+                    QString title = QString("Glyph Inspector - U+%1").arg(hex);
+                    ui->tabWidget->setTabText(tab_index, title);
+                }
+            }
+        });
 }
 
 bool FontWidget::init(const QString &p)
 {
+    m_font_path      = p;
     const auto ft_id = QFontDatabase::addApplicationFont(p);
     if (-1 == ft_id) {
         qprintt << "addApplicationFont err";
@@ -325,8 +365,9 @@ void FontWidget::copy()
     qApp->setOverrideCursor(Qt::BusyCursor);
 
     QPixmap pix;
-    if (ui->tabWidget->currentWidget() == ui->tab_text
-        || ui->tabWidget->currentWidget() == ui->tab_sample) {
+    auto cur_tab = ui->tabWidget->currentWidget();
+
+    if (cur_tab == ui->tab_text || cur_tab == ui->tab_sample) {
         // pix = ui->label_preview->grab();
         pix = QPixmap(ui->label_preview->size());
         pix.fill(ui->label_preview->palette().base().color());
@@ -334,7 +375,22 @@ void FontWidget::copy()
         ui->label_preview->render(&painter);
         painter.end();
     }
+    else if (cur_tab == m_tab_glyph_inspector) {
+        if (!m_wnd_glyph_inspector->hasSelection()) {
+            qApp->restoreOverrideCursor();
+            emit sigToast("Please select a character first");
+            return;
+        }
+        pix = m_wnd_glyph_inspector->getPreviewPixmap();
+        if (pix.isNull()) {
+            qprintt << __FUNCTION__ << "glyph inspector pix.isNull";
+            qApp->restoreOverrideCursor();
+            emit sigToast("Failed to copy preview");
+            return;
+        }
+    }
     else {
+        // Characters tab
         pix = m_wnd_char->getSelectedCharPix();
         if (pix.isNull()) {
             qprintt << __FUNCTION__ << "pix.isNull";
@@ -363,6 +419,9 @@ void FontWidget::updateTabTextPreview()
 
     ui->label_preview->setFont(ft);
     m_wnd_char->updateFont(ft);
+    if (m_wnd_glyph_inspector) {
+        m_wnd_glyph_inspector->updateFont(ft);
+    }
 
     QString text;
     auto cur_wnd = ui->tabWidget->currentWidget();
@@ -471,27 +530,51 @@ void FontWidget::updateTheme(int theme)
     m_btn_svg->setFixedSize(sz, sz);
     m_btn_svg->setIconSize(QSize(sz - 12, sz - 12));
     m_btn_svg->setIcon(icon_svg);
+    if (m_wnd_glyph_inspector) {
+        m_wnd_glyph_inspector->updateTheme(theme);
+    }
 }
 
 void FontWidget::saveAsSvg()
 {
-    const bool is_char_tab
-        = ui->tabWidget->currentWidget() != ui->tab_text
-          && ui->tabWidget->currentWidget() != ui->tab_sample;
+    auto cur_tab = ui->tabWidget->currentWidget();
+    const bool is_text_or_sample
+        = (cur_tab == ui->tab_text || cur_tab == ui->tab_sample);
+    const bool is_glyph_inspector = (cur_tab == m_tab_glyph_inspector);
 
     QSize sz;
     std::function<void(QPainter &)> draw_fn;
+    QChar selected_char;
 
-    if (!is_char_tab) {
+    if (is_text_or_sample) {
         sz      = ui->label_preview->size();
         draw_fn = [this](QPainter &p) { ui->label_preview->render(&p); };
     }
+    else if (is_glyph_inspector) {
+        if (!m_wnd_glyph_inspector->hasSelection()) {
+            emit sigToast("Please select a character first");
+            return;
+        }
+        // Use the preview widget's size and render it
+        QPixmap preview = m_wnd_glyph_inspector->getPreviewPixmap();
+        if (preview.isNull()) {
+            emit sigToast("Failed to generate preview");
+            return;
+        }
+        sz      = preview.size();
+        draw_fn = [preview](QPainter &p) { p.drawPixmap(0, 0, preview); };
+        // Get character for filename
+        const auto info = m_wnd_char->selectedCharInfo();
+        selected_char   = info.ch;
+    }
     else {
+        // Characters tab
         const auto info = m_wnd_char->selectedCharInfo();
         if (info.ch.isNull()) {
             emit sigToast("Please select a character first");
             return;
         }
+        selected_char  = info.ch;
         const int side = qMax(64, info.square_size * 2);
         sz             = QSize(side, side);
         QFont ft       = info.font;
@@ -508,9 +591,9 @@ void FontWidget::saveAsSvg()
         = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
     const QString family = ui->comboBox_family->currentText();
     QString stem         = family;
-    if (is_char_tab) {
-        const auto info = m_wnd_char->selectedCharInfo();
-        stem += QString("_U+%1").arg(info.ch.unicode(), 4, 16, QChar('0'));
+    if (!selected_char.isNull()) {
+        stem
+            += QString("_U+%1").arg(selected_char.unicode(), 4, 16, QChar('0'));
     }
     stem.replace(QRegularExpression(R"([\/:*?"<>|])"), "_");
     const QString path = dir + "/" + stem + ".svg";

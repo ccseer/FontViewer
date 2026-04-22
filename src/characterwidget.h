@@ -80,6 +80,9 @@ public:
 public slots:
     void updateFont(const QFont &font);
 
+signals:
+    void selectionChanged(QChar ch);
+
 protected:
     QSize sizeHint() const override;
     void mouseMoveEvent(QMouseEvent *event) override;

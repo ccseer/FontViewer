@@ -23,6 +23,7 @@ add_library(fontviewer SHARED
     fontwidget.cpp
     fontwidget.ui
     fontinfo.cpp
+    glyphinspectorwidget.cpp
     ${seersdk_SOURCE_DIR}/seer/viewerbase.h
 )
 
