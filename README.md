@@ -8,6 +8,8 @@
 
 ![](res/2022-09-30-17-34-35.png)
 
+![Glyph Inspector](gi.png)
+
 ## Building and Running
 
 Requirements: Qt 6.8, CMake 3.16+.

@@ -40,9 +40,9 @@ private:
     void onNameChanged();
     void onTabChanged();
 
-    CharacterWidget *m_wnd_char                 = nullptr;
-    GlyphInspectorWidget *m_wnd_glyph_inspector = nullptr;
-    QWidget *m_tab_glyph_inspector              = nullptr;
+    CharacterWidget *m_wnd_char    = nullptr;
+    GlyphInspectorWidget *m_wnd_gi = nullptr;
+    QWidget *m_tab_gi              = nullptr;
 
     QPushButton *m_btn_copy = nullptr;
     QPushButton *m_btn_svg  = nullptr;

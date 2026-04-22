@@ -194,13 +194,13 @@ void FontWidget::initUI(const QStringList &names_raw)
     m_wnd_char->installEventFilter(this);
 
     // tab glyph inspector
-    auto wnd_glyph_sa     = new QScrollArea(this);
-    m_wnd_glyph_inspector = new GlyphInspectorWidget(this);
+    auto wnd_glyph_sa = new QScrollArea(this);
+    m_wnd_gi          = new GlyphInspectorWidget(this);
     wnd_glyph_sa->setFrameShape(QFrame::NoFrame);
     wnd_glyph_sa->setWidgetResizable(true);
-    wnd_glyph_sa->setWidget(m_wnd_glyph_inspector);
+    wnd_glyph_sa->setWidget(m_wnd_gi);
     ui->tabWidget->addTab(wnd_glyph_sa, "Glyph Inspector");
-    m_tab_glyph_inspector = wnd_glyph_sa;
+    m_tab_gi = wnd_glyph_sa;
 
     // Connect character selection to glyph inspector
     connect(
@@ -214,10 +214,10 @@ void FontWidget::initUI(const QStringList &names_raw)
                 ft.setWeight((QFont::Weight)weight);
             }
             ft.setItalic(QFontDatabase::italic(name, style));
-            m_wnd_glyph_inspector->updateGlyph(ch, ft, m_font_path);
+            m_wnd_gi->updateGlyph(ch, ft, m_font_path);
 
             // Update tab title with character code
-            int tab_index = ui->tabWidget->indexOf(m_tab_glyph_inspector);
+            int tab_index = ui->tabWidget->indexOf(m_tab_gi);
             if (tab_index != -1) {
                 if (ch.isNull()) {
                     ui->tabWidget->setTabText(tab_index, "Glyph Inspector");
@@ -375,13 +375,13 @@ void FontWidget::copy()
         ui->label_preview->render(&painter);
         painter.end();
     }
-    else if (cur_tab == m_tab_glyph_inspector) {
-        if (!m_wnd_glyph_inspector->hasSelection()) {
+    else if (cur_tab == m_tab_gi) {
+        if (!m_wnd_gi->hasSelection()) {
             qApp->restoreOverrideCursor();
             emit sigToast("Please select a character first");
             return;
         }
-        pix = m_wnd_glyph_inspector->getPreviewPixmap();
+        pix = m_wnd_gi->getPreviewPixmap();
         if (pix.isNull()) {
             qprintt << __FUNCTION__ << "glyph inspector pix.isNull";
             qApp->restoreOverrideCursor();
@@ -419,8 +419,8 @@ void FontWidget::updateTabTextPreview()
 
     ui->label_preview->setFont(ft);
     m_wnd_char->updateFont(ft);
-    if (m_wnd_glyph_inspector) {
-        m_wnd_glyph_inspector->updateFont(ft);
+    if (m_wnd_gi) {
+        m_wnd_gi->updateFont(ft);
     }
 
     QString text;
@@ -530,8 +530,8 @@ void FontWidget::updateTheme(int theme)
     m_btn_svg->setFixedSize(sz, sz);
     m_btn_svg->setIconSize(QSize(sz - 12, sz - 12));
     m_btn_svg->setIcon(icon_svg);
-    if (m_wnd_glyph_inspector) {
-        m_wnd_glyph_inspector->updateTheme(theme);
+    if (m_wnd_gi) {
+        m_wnd_gi->updateTheme(theme);
     }
 }
 
@@ -540,7 +540,7 @@ void FontWidget::saveAsSvg()
     auto cur_tab = ui->tabWidget->currentWidget();
     const bool is_text_or_sample
         = (cur_tab == ui->tab_text || cur_tab == ui->tab_sample);
-    const bool is_glyph_inspector = (cur_tab == m_tab_glyph_inspector);
+    const bool is_glyph_inspector = (cur_tab == m_tab_gi);
 
     QSize sz;
     std::function<void(QPainter &)> draw_fn;
@@ -551,12 +551,12 @@ void FontWidget::saveAsSvg()
         draw_fn = [this](QPainter &p) { ui->label_preview->render(&p); };
     }
     else if (is_glyph_inspector) {
-        if (!m_wnd_glyph_inspector->hasSelection()) {
+        if (!m_wnd_gi->hasSelection()) {
             emit sigToast("Please select a character first");
             return;
         }
         // Use the preview widget's size and render it
-        QPixmap preview = m_wnd_glyph_inspector->getPreviewPixmap();
+        QPixmap preview = m_wnd_gi->getPreviewPixmap();
         if (preview.isNull()) {
             emit sigToast("Failed to generate preview");
             return;
