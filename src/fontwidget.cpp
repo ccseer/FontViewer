@@ -338,11 +338,12 @@ void FontWidget::copy()
         pix = m_wnd_char->getSelectedCharPix();
         if (pix.isNull()) {
             qprintt << __FUNCTION__ << "pix.isNull";
+            qApp->restoreOverrideCursor();
+            emit sigToast("Please select a character first");
+            return;
         }
     }
-    if (!pix.isNull()) {
-        qApp->clipboard()->setPixmap(pix);
-    }
+    qApp->clipboard()->setPixmap(pix);
     qApp->restoreOverrideCursor();
 }
 
@@ -488,6 +489,7 @@ void FontWidget::saveAsSvg()
     else {
         const auto info = m_wnd_char->selectedCharInfo();
         if (info.ch.isNull()) {
+            emit sigToast("Please select a character first");
             return;
         }
         const int side = qMax(64, info.square_size * 2);
