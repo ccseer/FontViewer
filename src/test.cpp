@@ -20,10 +20,11 @@ int main(int argc, char *argv[])
     }
 
     ViewOptionsPrivate d;
-    d.dpr         = 1;
-    d.theme       = 0;
-    d.path        = path;
-    d.viewer_type = "fontviewer";
+    d.dpr                                    = 1;
+    d.theme                                  = 0;
+    d.path                                   = path;
+    d.viewer_type                            = "fontviewer";
+    d.extras[ViewOptionsKeys::kKeyPluginCmd] = "-p 50";
 
     ViewOptions opts;
     opts.d_ptr = &d;

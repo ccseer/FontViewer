@@ -7,6 +7,19 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
+# MSVC: Enable Debug Information in Release builds
+# /Zi: Generates a PDB file
+# /DEBUG: Linker flag to create the PDB
+# /OPT:REF & /OPT:ICF: Optimize the binary despite debug info presence
+if(MSVC)
+    add_compile_options("$<$<CONFIG:Release>:/Zi>")
+    add_link_options(
+        "$<$<CONFIG:Release>:/DEBUG>"
+        "$<$<CONFIG:Release>:/OPT:REF>"
+        "$<$<CONFIG:Release>:/OPT:ICF>"
+    )
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg)
 
 include(FetchContent)
