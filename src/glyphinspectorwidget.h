@@ -84,7 +84,10 @@ class GlyphPreviewWidget : public QWidget {
 public:
     explicit GlyphPreviewWidget(QWidget *parent = nullptr);
 
-    void setGlyphData(QChar ch, const QFont &font, const QRectF &bbox);
+    void setGlyphData(QChar ch,
+                      const QFont &font,
+                      const QRectF &bbox,
+                      qreal advance_width);
     void clear();
 
     QSize sizeHint() const override;
@@ -96,5 +99,6 @@ private:
     QChar m_char;
     QFont m_font;
     QRectF m_bbox;
-    bool m_has_data = false;
+    qreal m_advance_width = 0;
+    bool m_has_data       = false;
 };

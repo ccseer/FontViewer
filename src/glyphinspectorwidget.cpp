@@ -19,12 +19,14 @@ GlyphPreviewWidget::GlyphPreviewWidget(QWidget *parent) : QWidget(parent)
 
 void GlyphPreviewWidget::setGlyphData(QChar ch,
                                       const QFont &font,
-                                      const QRectF &bbox)
+                                      const QRectF &bbox,
+                                      qreal advance_width)
 {
-    m_char     = ch;
-    m_font     = font;
-    m_bbox     = bbox;
-    m_has_data = true;
+    m_char          = ch;
+    m_font          = font;
+    m_bbox          = bbox;
+    m_advance_width = advance_width;
+    m_has_data      = true;
     update();
 }
 
@@ -57,121 +59,160 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     }
 
     // Calculate center
-    int center_x = rect.width() / 2;
-    int center_y = rect.height() / 2;
+    qreal center_x = rect.width() / 2.0;
+    qreal center_y = rect.height() / 2.0;
 
     // Setup display font
     QFont display_font = m_font;
-    display_font.setPointSize(qMax(72, m_font.pointSize() * 4));
-    QFontMetrics fm(display_font);
+    display_font.setPointSize(qMax(72.0, m_font.pointSize() * 4.0));
+    QFontMetricsF display_fm(display_font);
+
+    // Get strict metrics from QRawFont at display size to ensure consistency
+    QRawFont display_raw = QRawFont::fromFont(display_font);
+    QRectF glyph_box;
+    qreal display_advance = 0;
+    qreal display_ascent  = display_fm.ascent();
+    qreal display_descent = display_fm.descent();
+
+    bool use_strict = false;
+    if (display_raw.isValid()) {
+        QString str(m_char);
+        QVector<quint32> indexes = display_raw.glyphIndexesForString(str);
+        if (!indexes.isEmpty()) {
+            quint32 index = indexes[0];
+            glyph_box     = display_raw.boundingRect(index);
+            display_advance
+                = display_raw.advancesForGlyphIndexes({index}).at(0).x();
+            display_ascent  = display_raw.ascent();
+            display_descent = display_raw.descent();
+            use_strict      = true;
+        }
+    }
 
     // Calculate text position (center the glyph in the widget)
-    // drawText uses baseline as Y coordinate
-    // To center vertically: baseline = center_y + (ascent - descent) / 2
-    // Calculate text position (center the glyph in the widget)
-    // drawText uses baseline as Y coordinate
-    // To center vertically: baseline = center_y + (ascent - descent) / 2
-    int advance_width = fm.horizontalAdvance(m_char);
-    int text_x        = center_x - advance_width / 2;
-    int text_y        = center_y + (fm.ascent() - fm.descent()) / 2;
+    qreal text_x = center_x - display_advance / 2.0;
+    qreal text_y = center_y + (display_ascent - display_descent) / 2.0;
+
+    if (!use_strict) {
+        // Fallback: Calculate scaling ratio between base font and display font
+        // if QRawFont is not available for the display size
+        QFontMetricsF base_fm(m_font);
+        qreal sx = base_fm.horizontalAdvance(m_char) > 0
+                       ? qreal(display_fm.horizontalAdvance(m_char))
+                             / base_fm.horizontalAdvance(m_char)
+                       : 1.0;
+        qreal sy = base_fm.height() > 0
+                       ? qreal(display_fm.height()) / base_fm.height()
+                       : 1.0;
+
+        display_advance = m_advance_width * sx;
+        glyph_box       = QRectF(m_bbox.x() * sx, m_bbox.y() * sy,
+                                 m_bbox.width() * sx, m_bbox.height() * sy);
+        text_x          = center_x - display_fm.horizontalAdvance(m_char) / 2.0;
+        text_y = center_y + (display_fm.ascent() - display_fm.descent()) / 2.0;
+    }
+
+    // Translate glyph_box to actual drawing position
+    glyph_box.translate(text_x, text_y);
 
     // Draw advance width rectangle (subtle fill)
-    painter.fillRect(QRect(text_x, 20, advance_width, rect.height() - 40),
-                     QColor(200, 100, 255, 10));
+    painter.fillRect(
+        QRectF(text_x, 20.0, display_advance, rect.height() - 40.0),
+        QColor(200, 100, 255, 10));
 
     // Draw baseline (dashed line) - horizontal through text baseline
     QPen baseline_pen(pal.mid().color());
     baseline_pen.setStyle(Qt::DashLine);
-    baseline_pen.setWidth(1);
+    baseline_pen.setWidthF(1.0);
     painter.setPen(baseline_pen);
-    painter.drawLine(10, text_y, rect.width() - 10, text_y);
+    painter.drawLine(QPointF(10.0, text_y),
+                     QPointF(rect.width() - 10.0, text_y));
 
     // Draw vertical center line (dotted)
     QPen center_pen(pal.mid().color());
     center_pen.setStyle(Qt::DotLine);
-    center_pen.setWidth(1);
+    center_pen.setWidthF(1.0);
     painter.setPen(center_pen);
-    painter.drawLine(center_x, 10, center_x, rect.height() - 10);
+    painter.drawLine(QPointF(center_x, 10.0),
+                     QPointF(center_x, rect.height() - 10.0));
 
     // Draw advance width vertical lines
     QPen advance_pen(QColor(200, 100, 255, 120));
     advance_pen.setStyle(Qt::DashLine);
     painter.setPen(advance_pen);
-    painter.drawLine(text_x, 20, text_x, rect.height() - 20);
-    painter.drawLine(text_x + advance_width, 20, text_x + advance_width,
-                     rect.height() - 20);
+    painter.drawLine(QPointF(text_x, 20.0),
+                     QPointF(text_x, rect.height() - 20.0));
+    painter.drawLine(QPointF(text_x + display_advance, 20.0),
+                     QPointF(text_x + display_advance, rect.height() - 20.0));
 
     // Draw ascent line (above baseline)
     QPen ascent_pen(QColor(100, 150, 255, 120));
     ascent_pen.setStyle(Qt::DotLine);
     painter.setPen(ascent_pen);
-    int ascent_y = text_y - fm.ascent();
-    painter.drawLine(10, ascent_y, rect.width() - 10, ascent_y);
+    qreal ascent_y = text_y - display_ascent;
+    painter.drawLine(QPointF(10.0, ascent_y),
+                     QPointF(rect.width() - 10.0, ascent_y));
 
     // Draw descent line (below baseline)
     QPen descent_pen(QColor(255, 150, 100, 120));
     descent_pen.setStyle(Qt::DotLine);
     painter.setPen(descent_pen);
-    int descent_y = text_y + fm.descent();
-    painter.drawLine(10, descent_y, rect.width() - 10, descent_y);
+    qreal descent_y = text_y + display_descent;
+    painter.drawLine(QPointF(10.0, descent_y),
+                     QPointF(rect.width() - 10.0, descent_y));
 
     // Draw cap height line
-    int cap_y = text_y - fm.capHeight();
-    if (fm.capHeight() > 0 && cap_y != ascent_y) {
+    qreal cap_y = text_y - display_fm.capHeight();
+    if (display_fm.capHeight() > 0 && qAbs(cap_y - ascent_y) > 0.1) {
         QPen cap_pen(QColor(255, 100, 200, 120));
         cap_pen.setStyle(Qt::DotLine);
         painter.setPen(cap_pen);
-        painter.drawLine(10, cap_y, rect.width() - 10, cap_y);
+        painter.drawLine(QPointF(10.0, cap_y),
+                         QPointF(rect.width() - 10.0, cap_y));
     }
 
     // Draw x-height line
-    int x_y = text_y - fm.xHeight();
-    if (fm.xHeight() > 0) {
+    qreal x_y = text_y - display_fm.xHeight();
+    if (display_fm.xHeight() > 0) {
         QPen x_pen(QColor(100, 200, 150, 120));
         x_pen.setStyle(Qt::DotLine);
         painter.setPen(x_pen);
-        painter.drawLine(10, x_y, rect.width() - 10, x_y);
+        painter.drawLine(QPointF(10.0, x_y), QPointF(rect.width() - 10.0, x_y));
     }
 
     // Draw bounding box (green) - actual glyph bounds
     QPen bbox_pen(QColor(100, 255, 100, 100));
     bbox_pen.setStyle(Qt::DashDotLine);
-    bbox_pen.setWidth(1);
+    bbox_pen.setWidthF(1.0);
     painter.setPen(bbox_pen);
-
-    // Get tight bounding rect for the character
-    QRect tight_bbox = fm.tightBoundingRect(m_char);
-    // tightBoundingRect returns rect relative to baseline at (0,0)
-    // Translate to actual drawing position
-    tight_bbox.translate(text_x, text_y);
-    painter.drawRect(tight_bbox);
+    painter.drawRect(glyph_box);
 
     // Draw bearing markers
     QPen bearing_pen(QColor(150, 150, 150, 80));
     bearing_pen.setStyle(Qt::DotLine);
     painter.setPen(bearing_pen);
-    painter.drawLine(tight_bbox.left(), 30, tight_bbox.left(),
-                     rect.height() - 30);
-    painter.drawLine(tight_bbox.right(), 30, tight_bbox.right(),
-                     rect.height() - 30);
+    painter.drawLine(QPointF(glyph_box.left(), 30.0),
+                     QPointF(glyph_box.left(), rect.height() - 30.0));
+    painter.drawLine(QPointF(glyph_box.right(), 30.0),
+                     QPointF(glyph_box.right(), rect.height() - 30.0));
 
     // Draw the glyph
     painter.setFont(display_font);
     painter.setPen(pal.text().color());
-    painter.drawText(text_x, text_y, QString(m_char));
+    painter.drawText(QPointF(text_x, text_y), QString(m_char));
 
     // Draw labels with better safety margins and alignment
     QFont label_font = painter.font();
     label_font.setPointSize(8);
     painter.setFont(label_font);
 
-    auto drawMetricLabel = [&](int y, const QString &text, QColor color,
+    auto drawMetricLabel = [&](qreal y, const QString &text, QColor color,
                                bool isAbove) {
         painter.setPen(color);
-        int w = 100;
-        int h = 25;
-        int x = rect.width() - w - 5;
-        QRect r(x, isAbove ? y - h : y, w, h);
+        qreal w = 100.0;
+        qreal h = 25.0;
+        qreal x = rect.width() - w - 5.0;
+        QRectF r(x, isAbove ? y - h : y, w, h);
         painter.drawText(
             r, Qt::AlignRight | (isAbove ? Qt::AlignBottom : Qt::AlignTop),
             text);
@@ -179,31 +220,35 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
 
     // Right-side horizontal metrics
     drawMetricLabel(ascent_y, "ascent", QColor(100, 150, 255), true);
-    if (fm.capHeight() > 0 && cap_y != ascent_y) {
+    if (display_fm.capHeight() > 0 && qAbs(cap_y - ascent_y) > 0.1) {
         drawMetricLabel(cap_y, "cap height", QColor(255, 100, 200), true);
     }
-    if (fm.xHeight() > 0) {
+    if (display_fm.xHeight() > 0) {
         drawMetricLabel(x_y, "x-height", QColor(100, 200, 150), true);
     }
     drawMetricLabel(text_y, "baseline", pal.mid().color(), false);
     drawMetricLabel(descent_y, "descent", QColor(255, 150, 100), false);
 
     // Vertical metrics (Origin, Advance, LSB, RSB)
-    auto drawVerticalLabel = [&](int x, const QString &text, QColor color,
+    auto drawVerticalLabel = [&](qreal x, const QString &text, QColor color,
                                  bool isBottom, bool isLeftOfLine) {
         painter.setPen(color);
-        int w       = 60;
-        int h       = 20;
-        int label_x = isLeftOfLine ? x - w - 2 : x + 2;
+        qreal text_w  = painter.fontMetrics().horizontalAdvance(text);
+        qreal w       = text_w + 4.0;
+        qreal h       = 20.0;
+        qreal label_x = isLeftOfLine ? x - w - 2.0 : x + 2.0;
 
         // Boundary check: if outside is clipped by widget, move to inside
-        if (label_x < 5)
-            label_x = x + 2;
-        if (label_x + w > rect.width() - 5)
-            label_x = x - w - 2;
+        if (label_x < 5.0)
+            label_x = x + 2.0;
+        if (label_x + w > rect.width() - 5.0)
+            label_x = x - w - 2.0;
 
-        int label_y = isBottom ? rect.height() - h - 5 : 5;
-        QRect r(label_x, label_y, w, h);
+        // Final safety clamp
+        label_x = qBound(2.0, label_x, rect.width() - w - 2.0);
+
+        qreal label_y = isBottom ? rect.height() - h - 5.0 : 5.0;
+        QRectF r(label_x, label_y, w, h);
         painter.drawText(
             r,
             (label_x < x ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter,
@@ -211,15 +256,15 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     };
 
     drawVerticalLabel(text_x, "origin", QColor(200, 100, 255), true, true);
-    drawVerticalLabel(text_x + advance_width, "advance", QColor(200, 100, 255),
-                      true, false);
+    drawVerticalLabel(text_x + display_advance, "advance",
+                      QColor(200, 100, 255), true, false);
 
-    if (tight_bbox.left() != text_x) {
-        drawVerticalLabel(tight_bbox.left(), "LSB", QColor(150, 150, 150),
-                          false, true);
+    if (qAbs(glyph_box.left() - text_x) > 0.1) {
+        drawVerticalLabel(glyph_box.left(), "LSB", QColor(150, 150, 150), false,
+                          true);
     }
-    if (tight_bbox.right() != text_x + advance_width) {
-        drawVerticalLabel(tight_bbox.right(), "RSB", QColor(150, 150, 150),
+    if (qAbs(glyph_box.right() - (text_x + display_advance)) > 0.1) {
+        drawVerticalLabel(glyph_box.right(), "RSB", QColor(150, 150, 150),
                           false, false);
     }
 }
@@ -319,7 +364,8 @@ void GlyphInspectorWidget::updateGlyph(QChar ch,
 
         updateMetrics();
         updateLabels();
-        m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box);
+        m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box,
+                                       m_metrics.advance_width);
     }
     else {
         clearSelection();
@@ -351,7 +397,8 @@ void GlyphInspectorWidget::updateFont(const QFont &font)
         m_font = font;
         updateMetrics();
         updateLabels();
-        m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box);
+        m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box,
+                                       m_metrics.advance_width);
     }
 }
 
@@ -370,7 +417,7 @@ void GlyphInspectorWidget::updateMetrics()
     if (!raw_font.isValid()) {
         qprintt << "QRawFont invalid, falling back to QFontMetrics";
         // Fallback to QFontMetrics
-        QFontMetrics fm(m_font);
+        QFontMetricsF fm(m_font);
         m_metrics.advance_width = fm.horizontalAdvance(m_char);
         m_metrics.bounding_box  = fm.boundingRect(m_char);
         m_metrics.ascent        = fm.ascent();
