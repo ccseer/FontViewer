@@ -73,7 +73,7 @@ public:
     struct SelectedCharInfo {
         QChar ch;
         QFont font;
-        int   square_size = 0;
+        int square_size = 0;
     };
     SelectedCharInfo selectedCharInfo() const;
 
@@ -82,11 +82,13 @@ public slots:
 
 signals:
     void selectionChanged(QChar ch);
+    void characterDoubleClicked(QChar ch);
 
 protected:
     QSize sizeHint() const override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
 private:

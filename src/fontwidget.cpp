@@ -231,6 +231,16 @@ void FontWidget::initUI(const QStringList &names_raw)
                 }
             }
         });
+
+    // Connect double-click to switch to Glyph Inspector tab
+    connect(m_wnd_char, &CharacterWidget::characterDoubleClicked, this,
+            [this](QChar ch) {
+                Q_UNUSED(ch);
+                int tab_index = ui->tabWidget->indexOf(m_tab_gi);
+                if (tab_index != -1) {
+                    ui->tabWidget->setCurrentIndex(tab_index);
+                }
+            });
 }
 
 bool FontWidget::init(const QString &p)

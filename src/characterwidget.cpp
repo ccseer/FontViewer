@@ -140,6 +140,19 @@ void CharacterWidget::mousePressEvent(QMouseEvent *event)
     update();
 }
 
+void CharacterWidget::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mouseDoubleClickEvent(event);
+        return;
+    }
+
+    ushort key = getCharIndexAtPos(event->pos());
+    if (key != 0) {
+        emit characterDoubleClicked(QChar(key));
+    }
+}
+
 void CharacterWidget::paintEvent(QPaintEvent *event)
 {
     if (m_char_indexes.empty()) {
