@@ -2,6 +2,7 @@
 
 #include <qt_windows.h>
 
+#include <QApplication>
 #include <QClipboard>
 #include <QFontDatabase>
 #include <QListView>
@@ -14,6 +15,7 @@
 #include <QStandardPaths>
 #include <QSvgGenerator>
 #include <QSvgRenderer>
+#include <QTabBar>
 #include <QWheelEvent>
 
 #include "characterwidget.h"
@@ -50,12 +52,10 @@ constexpr auto g_svg_save_svg = R"SVG(
   <line x1="12" y1="15" x2="12" y2="3"/>
 </svg>)SVG";
 
-QIcon svgIcon(const char *svg_data, bool dark_theme, qreal dpr)
+QIcon svgIcon(const char *svg_data, const QColor &color, int icon_sz, qreal dpr)
 {
     QByteArray data(svg_data);
-    // dark theme: use light icon; light theme: use dark icon
-    const QByteArray color = dark_theme ? "#e0e0e0" : "#303030";
-    data.replace("currentColor", color);
+    data.replace("currentColor", color.name(QColor::HexRgb).toUtf8());
 
     QSvgRenderer renderer(data);
     if (!renderer.isValid()) {
@@ -63,8 +63,7 @@ QIcon svgIcon(const char *svg_data, bool dark_theme, qreal dpr)
         return {};
     }
 
-    constexpr int icon_sz = 20;
-    const int phys        = qRound(icon_sz * dpr);
+    const int phys = qRound(icon_sz * dpr);
     QPixmap pix(phys, phys);
     pix.setDevicePixelRatio(dpr);
     pix.fill(Qt::transparent);
@@ -73,18 +72,12 @@ QIcon svgIcon(const char *svg_data, bool dark_theme, qreal dpr)
     return QIcon(pix);
 }
 
-QPushButton *makeIconButton(const char *svg_data,
-                            const QString &tooltip,
-                            QWidget *parent)
+QPushButton *makeIconButton(const char *tooltip, QWidget *parent)
 {
     auto btn = new QPushButton(parent);
     btn->setFlat(true);
     btn->setCursor(Qt::PointingHandCursor);
     btn->setToolTip(tooltip);
-    // size scales with DPR
-    const int sz = qRound(32 * parent->devicePixelRatioF());
-    btn->setFixedSize(sz, sz);
-    btn->setIconSize(QSize(sz - 12, sz - 12));
     return btn;
 }
 
@@ -157,8 +150,8 @@ void FontWidget::initUI(const QStringList &names_raw)
     corner_lay->setContentsMargins(0, 0, 4, 0);
     corner_lay->setSpacing(2);
 
-    m_btn_copy = makeIconButton(g_svg_copy_image, "Copy as Image", this);
-    m_btn_svg  = makeIconButton(g_svg_save_svg, "Save as SVG", this);
+    m_btn_copy = makeIconButton("Copy as Image", this);
+    m_btn_svg  = makeIconButton("Save as SVG", this);
     connect(m_btn_copy, &QPushButton::clicked, this, &FontWidget::copy);
     connect(m_btn_svg, &QPushButton::clicked, this, &FontWidget::saveAsSvg);
 
@@ -223,9 +216,9 @@ void FontWidget::initUI(const QStringList &names_raw)
                     ui->tabWidget->setTabText(tab_index, "Glyph Inspector");
                 }
                 else {
-                    QString hex   = QString("%1")
-                                        .arg(ch.unicode(), 4, 16, QChar('0'))
-                                        .toUpper();
+                    QString hex = QString("%1")
+                                      .arg(ch.unicode(), 4, 16, QChar('0'))
+                                      .toUpper();
                     QString title = QString("Glyph Inspector - U+%1").arg(hex);
                     ui->tabWidget->setTabText(tab_index, title);
                 }
@@ -531,15 +524,36 @@ void FontWidget::updateTheme(int theme)
     }
     const bool dark = (theme == 1);
     const qreal dpr = devicePixelRatioF();
-    const int sz    = qRound(32 * dpr);
-    auto icon_copy  = svgIcon(g_svg_copy_image, dark, dpr);
-    auto icon_svg   = svgIcon(g_svg_save_svg, dark, dpr);
-    m_btn_copy->setFixedSize(sz, sz);
-    m_btn_copy->setIconSize(QSize(sz - 12, sz - 12));
+
+    // Get tab bar height
+    int sz = 0;
+    if (auto bar = ui->tabWidget->findChild<QTabBar *>()) {
+        sz = bar->height();
+        if (sz <= 0) {
+            sz = bar->sizeHint().height();
+        }
+    }
+    if (sz <= 0) {
+        sz = qRound(32 * dpr);
+    }
+
+    // width == height, and height matches tab height
+    const int btn_sz  = sz;
+    const int margin  = qRound(6 * dpr);
+    const int icon_sz = btn_sz - 2 * margin;
+
+    const QColor color = qApp->palette().color(QPalette::WindowText);
+    auto icon_copy     = svgIcon(g_svg_copy_image, color, icon_sz, dpr);
+    auto icon_svg      = svgIcon(g_svg_save_svg, color, icon_sz, dpr);
+
+    m_btn_copy->setFixedSize(btn_sz, btn_sz);
+    m_btn_copy->setIconSize(QSize(icon_sz, icon_sz));
     m_btn_copy->setIcon(icon_copy);
-    m_btn_svg->setFixedSize(sz, sz);
-    m_btn_svg->setIconSize(QSize(sz - 12, sz - 12));
+
+    m_btn_svg->setFixedSize(btn_sz, btn_sz);
+    m_btn_svg->setIconSize(QSize(icon_sz, icon_sz));
     m_btn_svg->setIcon(icon_svg);
+
     if (m_wnd_gi) {
         m_wnd_gi->updateTheme(theme);
     }
