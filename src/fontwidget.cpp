@@ -223,9 +223,9 @@ void FontWidget::initUI(const QStringList &names_raw)
                     ui->tabWidget->setTabText(tab_index, "Glyph Inspector");
                 }
                 else {
-                    QString hex = QString("%1")
-                                      .arg(ch.unicode(), 4, 16, QChar('0'))
-                                      .toUpper();
+                    QString hex   = QString("%1")
+                                        .arg(ch.unicode(), 4, 16, QChar('0'))
+                                        .toUpper();
                     QString title = QString("Glyph Inspector - U+%1").arg(hex);
                     ui->tabWidget->setTabText(tab_index, title);
                 }

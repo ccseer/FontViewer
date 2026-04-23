@@ -8,7 +8,7 @@
 
 ![](res/2022-09-30-17-34-35.png)
 
-![Glyph Inspector](gi.png)
+![Glyph Inspector](res/gi.png)
 
 ## Building and Running
 
