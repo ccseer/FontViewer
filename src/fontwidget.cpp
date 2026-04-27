@@ -52,6 +52,18 @@ constexpr auto g_svg_save_svg = R"SVG(
   <line x1="12" y1="15" x2="12" y2="3"/>
 </svg>)SVG";
 
+constexpr auto g_svg_chevron_up = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <polyline points="18 15 12 9 6 15"/>
+</svg>)SVG";
+
+constexpr auto g_svg_chevron_down = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <polyline points="6 9 12 15 18 9"/>
+</svg>)SVG";
+
 QIcon svgIcon(const char *svg_data, const QColor &color, int icon_sz, qreal dpr)
 {
     QByteArray data(svg_data);
@@ -80,7 +92,6 @@ QPushButton *makeIconButton(const char *tooltip, QWidget *parent)
     btn->setToolTip(tooltip);
     return btn;
 }
-
 }  // namespace
 
 FontWidget::FontWidget(QWidget *parent)
@@ -110,6 +121,7 @@ void FontWidget::initUI(const QStringList &names_raw)
         }
     };
     /// widget_top
+    ui->widget_top->layout()->setContentsMargins(0, 0, 0, 0);
     // names
     QStringList names = names_raw;
     names.removeDuplicates();
@@ -142,6 +154,25 @@ void FontWidget::initUI(const QStringList &names_raw)
     // breaks the layout!!!
     // ui->label_info->setWordWrap(true);
     ui->label_info->setAlignment(Qt::AlignCenter);
+
+    m_label_name_collapsed = new QLabel(this);
+    m_label_name_collapsed->setAlignment(Qt::AlignCenter);
+    m_label_name_collapsed->hide();
+    auto font_bold = m_label_name_collapsed->font();
+    font_bold.setBold(true);
+    m_label_name_collapsed->setFont(font_bold);
+
+    m_btn_toggle = makeIconButton("Collapse", this);
+    connect(m_btn_toggle, &QPushButton::clicked, this,
+            [this]() { setCollapsed(!isCollapsed()); });
+
+    // Add to main grid layout at the same cell as widget_top
+    // This keeps it at a fixed position relative to the top-right corner
+    ui->gridLayout->addWidget(m_btn_toggle, 0, 0,
+                              Qt::AlignTop | Qt::AlignRight);
+
+    // Add collapsed label to the same cell, centered
+    ui->gridLayout->addWidget(m_label_name_collapsed, 0, 0, Qt::AlignCenter);
 
     /// tab wnd
     ui->tabWidget->setTabText(ui->tabWidget->indexOf(ui->tab_text), "Text");
@@ -259,9 +290,25 @@ bool FontWidget::init(const QString &p)
     return true;
 }
 
+void FontWidget::setCollapsed(bool c)
+{
+    if (m_is_collapsed == c) {
+        return;
+    }
+    m_is_collapsed = c;
+
+    ui->widget_top_left->setVisible(!c);
+    ui->label_info->setVisible(!c);
+    m_label_name_collapsed->setVisible(c);
+
+    updateTheme(m_theme);
+    emit sigCollapsedChanged(c);
+}
+
 void FontWidget::onNameChanged()
 {
-    const auto name   = ui->comboBox_family->currentText();
+    const auto name = ui->comboBox_family->currentText();
+    m_label_name_collapsed->setText(name);
     const auto styles = QFontDatabase::styles(name);
     ui->comboBox_style->clear();
     ui->comboBox_style->addItems(styles);
@@ -553,6 +600,16 @@ void FontWidget::updateTheme(int theme)
     m_btn_svg->setFixedSize(btn_sz, btn_sz);
     m_btn_svg->setIconSize(QSize(icon_sz, icon_sz));
     m_btn_svg->setIcon(icon_svg);
+
+    if (m_btn_toggle) {
+        m_btn_toggle->setFixedSize(btn_sz, btn_sz);
+        m_btn_toggle->setIconSize(QSize(icon_sz, icon_sz));
+        auto icon_toggle
+            = svgIcon(m_is_collapsed ? g_svg_chevron_down : g_svg_chevron_up,
+                      color, icon_sz, dpr);
+        m_btn_toggle->setIcon(icon_toggle);
+        m_btn_toggle->setToolTip(m_is_collapsed ? "Expand" : "Collapse");
+    }
 
     if (m_wnd_gi) {
         m_wnd_gi->updateTheme(theme);

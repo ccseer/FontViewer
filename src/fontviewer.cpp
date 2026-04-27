@@ -1,4 +1,4 @@
-﻿#include "fontviewer.h"
+#include "fontviewer.h"
 
 #include <qt_windows.h>
 
@@ -16,6 +16,7 @@
 namespace {
 constexpr auto g_ini_user_text = "user_text";
 constexpr auto g_ini_font_size = "font_size";
+constexpr auto g_ini_collapsed = "collapsed";
 }  // namespace
 
 FontViewer::FontViewer(QWidget *parent)
@@ -28,6 +29,7 @@ FontViewer::~FontViewer()
     if (m_ini && m_view) {
         m_ini->setValue(g_ini_user_text, m_view->getCurrentText());
         m_ini->setValue(g_ini_font_size, m_view->getCurrentFontSize());
+        m_ini->setValue(g_ini_collapsed, m_view->isCollapsed());
     }
 }
 
@@ -95,6 +97,7 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
     m_ini = new QSettings(getIniPath(), QSettings::IniFormat, this);
     m_view->setCurrentText(m_ini->value(g_ini_user_text).toString());
     m_view->setCurrentFontSize(m_ini->value(g_ini_font_size).toInt());
+    m_view->setCollapsed(m_ini->value(g_ini_collapsed, false).toBool());
 
     updateTheme(options()->theme());
     updateDPR(options()->dpr());
