@@ -1,7 +1,8 @@
-// Offscreen regression suite for the Text tab: editable preview, type-scale
-// waterfall, focus contract and preference persistence. Tests that need a real
-// font take its path from FONTVIEWER_TEST_FONT and skip when the variable is
-// unset, so the suite never depends on a network download or a fixed path.
+// Offscreen regression suite for the viewer: text tab editing, type-scale
+// waterfall, focus contract, preference persistence and the FreeType-backed
+// inspector. Golden fonts ship in tests/fixtures and are baked in through
+// FONTVIEWER_FIXTURES_DIR; FONTVIEWER_TEST_FONT and FONTVIEWER_TTC_TEST_FONT
+// override them when set, and nothing is downloaded at test time.
 
 #include <QtTest>
 
@@ -13,6 +14,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFrame>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QInputMethodEvent>
@@ -211,7 +213,9 @@ private slots:
     void inspectorEngineParsesStaticAndVariableFixtures();
     void inspectorEngineTracksMvarDecorationMetrics();
     void inspectorEngineHandlesMissingPostTable();
+    void inspectorEngineDecodesMacRomanNameRecords();
     void inspectorEngineResolvesTtcAndLoadFileInfoLatches();
+    void inspectorEngineParsesSyntheticTtcCollection();
     void variableAxesBarControlsFocusWheelAndReset();
     void namedInstanceSyncsOrPreservesAxisCoords();
     void variableAxisDragDefersHiddenCharactersRebuild();
@@ -1453,6 +1457,12 @@ void ViewerTest::variableAxesBarControlsFocusWheelAndReset()
                  - 750.0f)
             < 1.0f);
 
+    view.setVariableAxisValue(QByteArrayLiteral("wght"), qQNaN());
+    QVERIFY(qAbs(view.variableAxisValues().value(QByteArrayLiteral("wght"))
+                 - 400.0f)
+            < 1.0f);
+
+    view.setVariableAxisValue(QByteArrayLiteral("wght"), 750.0f);
     resets.first()->click();
     QVERIFY(qAbs(view.variableAxisValues().value(QByteArrayLiteral("wght"))
                  - 400.0f)
@@ -1582,8 +1592,27 @@ void ViewerTest::glyphInspectorBandsNoOverlapAndNoHorizontalScroll()
     // block description that previously stretched QFormLayout horizontally.
     gi->updateGlyph(QChar(0x2F00), ft, vf_path, deco);
     QApplication::processEvents();
+    QApplication::processEvents();
 
     QCOMPARE(sa.horizontalScrollBar()->maximum(), 0);
+    for (QGroupBox *gb : gi->findChildren<QGroupBox *>()) {
+        if (!gb->isVisible()) {
+            continue;
+        }
+        const QRect gbrect = gb->rect();
+        for (QLabel *lbl : gb->findChildren<QLabel *>()) {
+            if (!lbl->isVisible()) {
+                continue;
+            }
+            const int hfw = lbl->hasHeightForWidth()
+                                ? lbl->heightForWidth(lbl->width())
+                                : lbl->sizeHint().height();
+            const QRect mapped(lbl->mapTo(gb, QPoint(0, 0)), lbl->size());
+            QVERIFY2(lbl->width() > 0, qPrintable(lbl->text()));
+            QVERIFY2(lbl->height() + 1 >= hfw, qPrintable(lbl->text()));
+            QVERIFY2(gbrect.contains(mapped), qPrintable(lbl->text()));
+        }
+    }
     auto *preview = gi->findChild<GlyphPreviewWidget *>();
     QVERIFY(preview != nullptr);
     QVERIFY(preview->isVisible());
@@ -1632,6 +1661,29 @@ void ViewerTest::glyphInspectorBandsNoOverlapAndNoHorizontalScroll()
         QVERIFY(bounds.contains(large_labels[i]));
         for (int j = i + 1; j < large_labels.size(); ++j) {
             QVERIFY(!large_labels[i].intersects(large_labels[j]));
+        }
+    }
+
+    // Stress-test minimum preview dimensions at extreme point sizes where
+    // ascent/descent lie far offscreen so vertical sweeps still search inside
+    // bounds without falling back to overlapping rects.
+    GlyphPreviewWidget compact_preview;
+    compact_preview.resize(compact_preview.minimumSize());
+    compact_preview.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&compact_preview));
+    const QRectF compact_bounds(compact_preview.rect());
+    for (int pt : {120, 200}) {
+        ft.setPointSize(pt);
+        compact_preview.setGlyphData(QChar('A'), ft, QRectF(0, -pt, pt, pt * 1.2),
+                                     pt * 0.6, deco);
+        compact_preview.repaint();
+        const QVector<QRectF> compact_labels = compact_preview.lastLabelRects();
+        QVERIFY(!compact_labels.isEmpty());
+        for (int i = 0; i < compact_labels.size(); ++i) {
+            QVERIFY(compact_bounds.contains(compact_labels[i]));
+            for (int j = i + 1; j < compact_labels.size(); ++j) {
+                QVERIFY(!compact_labels[i].intersects(compact_labels[j]));
+            }
         }
     }
 }
@@ -1693,6 +1745,25 @@ QByteArray buildCraftedNameTable(const QVector<QPair<quint16, QString>> &entries
     appendU16(table, storage_off);
     table.append(records);
     table.append(strings);
+    return table;
+}
+
+QByteArray buildMacRomanNameTable(quint16 name_id, const QByteArray &mac_roman)
+{
+    QByteArray records;
+    appendU16(records, 1);  // platformID = Macintosh
+    appendU16(records, 0);  // encodingID = Roman
+    appendU16(records, 0);  // languageID = English
+    appendU16(records, name_id);
+    appendU16(records, quint16(mac_roman.size()));
+    appendU16(records, 0);  // stringOffset, the only string starts at 0
+
+    QByteArray table;
+    appendU16(table, 0);  // format
+    appendU16(table, 1);  // count
+    appendU16(table, quint16(6 + records.size()));
+    table.append(records);
+    table.append(mac_roman);
     return table;
 }
 
@@ -1853,7 +1924,132 @@ QByteArray buildSyntheticSfntWithTables(
     out.append(data_blob);
     return out;
 }
+
+QByteArray buildSyntheticTtc(const QByteArray &base_ttf,
+                             const QByteArray &name0,
+                             const QByteArray &name1)
+{
+    QByteArray face0
+        = buildSyntheticSfntWithTables(base_ttf, {{"name", name0}});
+    QByteArray face1
+        = buildSyntheticSfntWithTables(base_ttf, {{"name", name1}});
+    if (face0.isEmpty() || face1.isEmpty()) {
+        return {};
+    }
+
+    const quint32 header_size = 12 + 2 * 4;
+    const quint32 off0        = header_size;
+    const quint32 off1        = off0 + quint32(face0.size());
+
+    // Table offsets in an sfnt directory are absolute from the start of the
+    // collection, so both directories must be rebased after concatenation.
+    auto rebase = [](QByteArray &sfnt, quint32 delta) {
+        const quint16 count = readU16Be(sfnt, 4);
+        for (int i = 0; i < count; ++i) {
+            const int rec_off = 12 + i * 16;
+            const quint32 val = readU32Be(sfnt, rec_off + 8) + delta;
+            sfnt[rec_off + 8]  = char((val >> 24) & 0xFF);
+            sfnt[rec_off + 9]  = char((val >> 16) & 0xFF);
+            sfnt[rec_off + 10] = char((val >> 8) & 0xFF);
+            sfnt[rec_off + 11] = char(val & 0xFF);
+        }
+    };
+    rebase(face0, off0);
+    rebase(face1, off1);
+
+    QByteArray out;
+    out.append("ttcf", 4);
+    appendU32(out, 0x00010000);
+    appendU32(out, 2);
+    appendU32(out, off0);
+    appendU32(out, off1);
+    out.append(face0);
+    out.append(face1);
+    return out;
+}
 }  // namespace
+
+void ViewerTest::inspectorEngineParsesSyntheticTtcCollection()
+{
+    const QString static_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!static_path.isEmpty());
+
+    QFile base_file(static_path);
+    QVERIFY(base_file.open(QIODevice::ReadOnly));
+    const QByteArray base_bytes = base_file.readAll();
+
+    // A two-face collection built from one fixture keeps TTC coverage
+    // deterministic; the system-font assertions in the latch test are optional.
+    const QByteArray name_face0 = buildCraftedNameTable(
+        {{1, QStringLiteral("TtcFaceZero")},
+         {2, QStringLiteral("Regular")}});
+    const QByteArray name_face1 = buildCraftedNameTable(
+        {{1, QStringLiteral("TtcFaceOne")},
+         {2, QStringLiteral("Bold")}});
+    const QByteArray synth_ttc
+        = buildSyntheticTtc(base_bytes, name_face0, name_face1);
+    QVERIFY(!synth_ttc.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString ttc_path = dir.filePath(QStringLiteral("two_faces.ttc"));
+    QFile ttc_file(ttc_path);
+    QVERIFY(ttc_file.open(QIODevice::WriteOnly));
+    QCOMPARE(ttc_file.write(synth_ttc), qint64(synth_ttc.size()));
+    ttc_file.close();
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(ttc_path));
+    QCOMPARE(engine.faceCount(), 2);
+    QVERIFY(!engine.inspectFace(0).name_records.isEmpty());
+    QVERIFY(!engine.inspectFace(1).name_records.isEmpty());
+    QCOMPARE(engine.resolveFaceIndex(QStringLiteral("TtcFaceOne"),
+                                     QStringLiteral("Bold")),
+             1);
+    QCOMPARE(engine.resolveFaceIndex(QStringLiteral("TtcFaceZero"),
+                                     QStringLiteral("Regular")),
+             0);
+    QCOMPARE(engine.resolveFaceIndex(QStringLiteral("MissingFamily"),
+                                     QStringLiteral("Regular")),
+             0);
+}
+
+void ViewerTest::inspectorEngineDecodesMacRomanNameRecords()
+{
+    const QString base_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!base_path.isEmpty());
+    QFile f(base_path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QByteArray base_bytes = f.readAll();
+
+    // 0x8E is "é" in Mac Roman but a C1 control character in Latin-1, so a
+    // Latin-1 decode would not produce the expected family name.
+    const QByteArray name_tbl
+        = buildMacRomanNameTable(1, QByteArray("Caf\x8E", 4));
+    const QByteArray synth_ttf
+        = buildSyntheticSfntWithTables(base_bytes, {{"name", name_tbl}});
+    QVERIFY(!synth_ttf.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString synth_path = dir.filePath(QStringLiteral("mac_name.ttf"));
+    QFile out_file(synth_path);
+    QVERIFY(out_file.open(QIODevice::WriteOnly));
+    QCOMPARE(out_file.write(synth_ttf), qint64(synth_ttf.size()));
+    out_file.close();
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(synth_path));
+
+    QString family;
+    for (const FontNameRecord &rec : engine.inspectFace(0).name_records) {
+        if (rec.label == QLatin1String("Family")) {
+            family = rec.value;
+            break;
+        }
+    }
+    QCOMPARE(family, QStringLiteral("Caf\u00E9"));
+}
 
 void ViewerTest::openTypeFeatureParserGroupsPriorityAndParams()
 {
@@ -1995,6 +2191,8 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
 
         for (QPushButton *pill : pills) {
             QCOMPARE(pill->focusPolicy(), Qt::NoFocus);
+            // Custom paint reads underMouse(); hover events need WA_Hover.
+            QVERIFY(pill->testAttribute(Qt::WA_Hover));
         }
 
         // Choose a feature whose pill exists in Roboto VF (prefer smcp or liga).
@@ -2122,6 +2320,8 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
             }
         }
         QVERIFY(note_lbl != nullptr);
+        // A non-wrapped hint would force the whole viewer layout wider.
+        QVERIFY(note_lbl->wordWrap());
         QPalette themed = makeThemePalette(true);
         const QColor custom_mid(0x88, 0x99, 0xAA);
         themed.setColor(QPalette::All, QPalette::Mid, custom_mid);
@@ -2132,6 +2332,40 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         // Leave an override enabled across close to prove non-persistence.
         view->setFeatureEnabled(toggle_tag, !initial_on);
         QCOMPARE(view->isFeatureEnabled(toggle_tag), !initial_on);
+    }
+
+    // Many-feature fonts (Noto Sans VF has 40+ features) must stay focus-free
+    // and keep the OpenType bar bounded so tabs stay usable.
+    {
+        const QString noto_vf = fixturePath("NotoSans-VariableFont_wdth,wght.ttf");
+        QVERIFY(!noto_vf.isEmpty());
+        FontWidget noto_view;
+        QVERIFY(noto_view.init(noto_vf));
+        noto_view.resize(480, 620);
+        noto_view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&noto_view));
+        QApplication::processEvents();
+        QVERIFY(noto_view.featurePillButtons().size() >= 30);
+        auto *noto_tabs = noto_view.findChild<QTabWidget *>();
+        QVERIFY(noto_tabs != nullptr);
+        QVERIFY(noto_tabs->height() >= 250);
+        QScrollArea *feat_scroll = nullptr;
+        for (QScrollArea *sa : noto_view.findChildren<QScrollArea *>()) {
+            if (!sa->findChildren<QPushButton *>().isEmpty()) {
+                feat_scroll = sa;
+                break;
+            }
+        }
+        QVERIFY(feat_scroll != nullptr);
+        QVERIFY(feat_scroll->verticalScrollBar()->maximum() > 0);
+        QVERIFY(feat_scroll->height() <= 120);
+        for (QWidget *child : noto_view.findChildren<QWidget *>()) {
+            if (qobject_cast<FontPreviewEdit *>(child)
+                || child->window() != noto_view.window()) {
+                continue;
+            }
+            QCOMPARE(child->focusPolicy(), Qt::NoFocus);
+        }
     }
 
     {

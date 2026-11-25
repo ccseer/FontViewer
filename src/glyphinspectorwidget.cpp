@@ -12,11 +12,19 @@
 #include <QVBoxLayout>
 #include <QtMath>
 
+#include <algorithm>
+#include <limits>
 #include <optional>
 
 #define qprintt qDebug() << "[GlyphInspector]"
 
 namespace {
+qreal rectOverlapArea(const QRectF &a, const QRectF &b)
+{
+    const QRectF inter = a.intersected(b);
+    return inter.isEmpty() ? 0.0 : inter.width() * inter.height();
+}
+
 QRectF placeNonOverlappingLabel(const QRectF &preferred,
                                 const QRectF &bounds,
                                 qreal step_y,
@@ -47,7 +55,7 @@ QRectF placeNonOverlappingLabel(const QRectF &preferred,
         return false;
     };
 
-    QRectF candidate = clamp_rect(preferred);
+    const QRectF candidate = clamp_rect(preferred);
     if (!overlaps(candidate)) {
         return candidate;
     }
@@ -60,44 +68,93 @@ QRectF placeNonOverlappingLabel(const QRectF &preferred,
         if (!overlaps(base)) {
             return base;
         }
-        for (int i = 1; i <= max_steps; ++i) {
-            QRectF shifted = origin;
-            shifted.translate(0.0, dir * mag * i);
-            shifted = clamp_rect(shifted);
-            if (!overlaps(shifted)) {
-                return shifted;
-            }
-        }
-        for (int i = 1; i <= max_steps; ++i) {
-            QRectF shifted = origin;
-            shifted.translate(0.0, -dir * mag * i);
-            shifted = clamp_rect(shifted);
-            if (!overlaps(shifted)) {
-                return shifted;
+        // Start vertical sweeps from the clamped origin so labels whose
+        // anchor lines fall far outside the widget still search inside bounds.
+        for (qreal s : {dir, -dir}) {
+            QRectF prev = base;
+            for (int i = 1; i <= max_steps; ++i) {
+                const QRectF shifted
+                    = clamp_rect(base.translated(0.0, s * mag * i));
+                if (!overlaps(shifted)) {
+                    return shifted;
+                }
+                if (shifted == prev) {
+                    break;
+                }
+                prev = shifted;
             }
         }
         return std::nullopt;
     };
 
-    if (const auto r = try_vertical(preferred)) {
+    if (const auto r = try_vertical(candidate)) {
         return *r;
     }
-    for (int col = 1; col <= 3; ++col) {
-        const qreal dx = (preferred.width() + 6.0) * col;
-        if (const auto r = try_vertical(preferred.translated(-dx, 0.0))) {
-            return *r;
+
+    QVector<qreal> x_candidates;
+    auto push_x = [&](qreal x) {
+        const qreal max_x
+            = qMax(bounds.left(), bounds.right() - candidate.width());
+        const qreal cx = qBound(bounds.left(), x, max_x);
+        for (qreal seen : x_candidates) {
+            if (qAbs(seen - cx) < 1.0) {
+                return;
+            }
         }
-        if (const auto r = try_vertical(preferred.translated(dx, 0.0))) {
+        x_candidates.append(cx);
+    };
+    push_x(candidate.left());
+    for (const QRectF &occ : occupied) {
+        if (occ.intersects(QRectF(candidate.left(), bounds.top(),
+                                  candidate.width(), bounds.height()))) {
+            push_x(occ.left() - candidate.width() - 4.0);
+            push_x(occ.right() + 4.0);
+        }
+    }
+    for (int col = 1; col <= 4; ++col) {
+        const qreal dx = qMax(24.0, candidate.width() + 6.0) * col;
+        push_x(candidate.left() - dx);
+        push_x(candidate.left() + dx);
+    }
+    push_x(bounds.left());
+    push_x(bounds.right() - candidate.width());
+
+    for (qreal x : x_candidates) {
+        QRectF probe = candidate;
+        probe.moveLeft(x);
+        if (const auto r = try_vertical(probe)) {
             return *r;
         }
     }
-    return candidate;
+
+    QRectF best     = candidate;
+    qreal best_area = std::numeric_limits<qreal>::max();
+    for (qreal x : x_candidates) {
+        for (int i = 0; i <= max_steps; ++i) {
+            const qreal max_y
+                = qMax(bounds.top(), bounds.bottom() - candidate.height());
+            const qreal y = qMin(bounds.top() + mag * i, max_y);
+            const QRectF probe(x, y, candidate.width(), candidate.height());
+            qreal area = 0.0;
+            for (const QRectF &occ : occupied) {
+                area += rectOverlapArea(probe, occ);
+            }
+            if (area < best_area) {
+                best_area = area;
+                best      = probe;
+                if (qFuzzyIsNull(area)) {
+                    return best;
+                }
+            }
+        }
+    }
+    return best;
 }
 
 void configureValueLabel(QLabel *label)
 {
     label->setWordWrap(true);
-    label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 }
 }  // namespace
 
@@ -447,6 +504,12 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     const QRectF safe_bounds = QRectF(rect).adjusted(4.0, 4.0, -4.0, -4.0);
     QVector<QRectF> occupied_labels;
 
+    auto measureLabelWidth = [&](const QString &elided) {
+        const qreal text_w = qMax(label_fm.horizontalAdvance(elided),
+                                  label_fm.boundingRect(elided).width());
+        return qMin(safe_bounds.width(), qCeil(text_w) + 4.0);
+    };
+
     auto drawMetricLabel = [&](qreal y, const QString &text, QColor color,
                                bool isAbove) {
         const qreal h = qCeil(label_fm.height()) + 2.0;
@@ -455,8 +518,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         }
         const QString elided = label_fm.elidedText(
             text, Qt::ElideRight, qMax(1.0, safe_bounds.width() - 4.0));
-        const qreal w = qMin(safe_bounds.width(),
-                             label_fm.horizontalAdvance(elided) + 4.0);
+        const qreal w = measureLabelWidth(elided);
         const qreal x = qMax(safe_bounds.left(), safe_bounds.right() - w);
         const QRectF preferred(x, isAbove ? y - h - 1.0 : y + 1.0, w, h);
         const QRectF r = placeNonOverlappingLabel(
@@ -503,8 +565,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         }
         const QString elided = label_fm.elidedText(
             text, Qt::ElideRight, qMax(1.0, safe_bounds.width() - 4.0));
-        const qreal text_w = label_fm.horizontalAdvance(elided);
-        const qreal w      = qMin(safe_bounds.width(), text_w + 4.0);
+        const qreal w      = measureLabelWidth(elided);
         qreal label_x      = isLeftOfLine ? x - w - 2.0 : x + 2.0;
 
         // Boundary check: if outside is clipped by widget, move to inside
@@ -527,7 +588,8 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         painter.setPen(color);
         painter.drawText(
             r,
-            (label_x < x ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter,
+            (r.center().x() < x ? Qt::AlignRight : Qt::AlignLeft)
+                | Qt::AlignVCenter,
             elided);
     };
 
@@ -657,7 +719,6 @@ void GlyphInspectorWidget::createUI()
         if (m_preview_widget) {
             m_preview_widget->setShowOutlinePoints(on);
         }
-        emit sigShowOutlinePointsChanged(on);
     });
 
     // Initially hide all groups

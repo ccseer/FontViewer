@@ -85,10 +85,6 @@ public:
     {
         return !m_faces.isEmpty();
     }
-    QString fontPath() const
-    {
-        return m_font_path;
-    }
     int faceCount() const
     {
         return m_faces.size();

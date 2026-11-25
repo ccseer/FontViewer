@@ -320,6 +320,9 @@ public:
         setChecked(info.default_on);
         setFocusPolicy(Qt::NoFocus);
         setCursor(Qt::PointingHandCursor);
+        // paintEvent() reads underMouse(), but hover enter/leave events (and the
+        // repaint they trigger) are only delivered when WA_Hover is set.
+        setAttribute(Qt::WA_Hover, true);
         QFont f = font();
         f.setPointSizeF(qMax(8.0, f.pointSizeF() - 1.0));
         setFont(f);
@@ -387,6 +390,94 @@ protected:
         painter.setFont(font());
         painter.drawText(r, Qt::AlignCenter, text());
     }
+};
+
+constexpr int kFeaturePillHSpacing = 6;
+constexpr int kFeaturePillVSpacing = 4;
+
+class FeaturePillsScrollArea : public QScrollArea {
+public:
+    explicit FeaturePillsScrollArea(QWidget *host, QWidget *parent = nullptr)
+        : QScrollArea(parent), m_host(host)
+    {
+        setFrameShape(QFrame::NoFrame);
+        setWidgetResizable(true);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        setFocusPolicy(Qt::NoFocus);
+        if (viewport()) {
+            viewport()->setFocusPolicy(Qt::NoFocus);
+        }
+        if (verticalScrollBar()) {
+            verticalScrollBar()->setFocusPolicy(Qt::NoFocus);
+        }
+        if (horizontalScrollBar()) {
+            horizontalScrollBar()->setFocusPolicy(Qt::NoFocus);
+        }
+        QSizePolicy sp(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        sp.setHeightForWidth(true);
+        setSizePolicy(sp);
+        setWidget(m_host);
+    }
+
+    bool hasHeightForWidth() const override
+    {
+        return true;
+    }
+
+    int heightForWidth(int width) const override
+    {
+        const int flow_h = contentHeightForWidth(width);
+        return qMin(flow_h, maxAreaHeight());
+    }
+
+    QSize sizeHint() const override
+    {
+        const int w = width() > 0 ? width() : 400;
+        return QSize(w, heightForWidth(w));
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        const int w      = width() > 0 ? width() : 200;
+        const int flow_h = contentHeightForWidth(w);
+        return QSize(0, qMin(flow_h, maxAreaHeight()));
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QScrollArea::resizeEvent(event);
+        updateGeometry();
+    }
+
+private:
+    int maxAreaHeight() const
+    {
+        int pill_h = 24;
+        if (m_host && m_host->layout() && m_host->layout()->count() > 0) {
+            if (QLayoutItem *first = m_host->layout()->itemAt(0)) {
+                pill_h = qMax(pill_h, first->sizeHint().height());
+            }
+        }
+        return pill_h * 3 + kFeaturePillVSpacing * 2;
+    }
+
+    int contentHeightForWidth(int width) const
+    {
+        if (!m_host || !m_host->layout() || m_host->layout()->count() == 0) {
+            return 0;
+        }
+        const int w = qMax(1, width);
+        int h       = m_host->layout()->heightForWidth(w);
+        if (h > maxAreaHeight() && verticalScrollBar()) {
+            const int sb_w = verticalScrollBar()->sizeHint().width();
+            h = m_host->layout()->heightForWidth(qMax(1, w - sb_w));
+        }
+        return qMax(0, h);
+    }
+
+    QWidget *m_host = nullptr;
 };
 
 // Keeps the Text tab toolbar on a single row and moves line height and letter
@@ -1005,6 +1096,9 @@ void FontWidget::initFeaturesBar()
 
     m_features_note = new QLabel(tr("Text preview only"), m_features_bar);
     m_features_note->setFocusPolicy(Qt::NoFocus);
+    // The spacing hint is long enough to exceed a narrow preview pane, so it
+    // wraps instead of widening the whole viewer layout.
+    m_features_note->setWordWrap(true);
     applyFeaturesNotePalette();
     header->addWidget(m_features_note, 1);
 
@@ -1034,8 +1128,12 @@ void FontWidget::initFeaturesBar()
     m_features_pills_host->setFocusPolicy(Qt::NoFocus);
     m_features_pills_host->setSizePolicy(QSizePolicy::Expanding,
                                          QSizePolicy::Preferred);
-    new FlowLayout(m_features_pills_host, 6, 4);
-    m_features_root->addWidget(m_features_pills_host);
+    new FlowLayout(m_features_pills_host, kFeaturePillHSpacing,
+                   kFeaturePillVSpacing);
+
+    m_features_scroll
+        = new FeaturePillsScrollArea(m_features_pills_host, m_features_bar);
+    m_features_root->addWidget(m_features_scroll);
 
     m_features_bar->hide();
     ui->gridLayout->addWidget(m_features_bar, 2, 0);
@@ -1121,6 +1219,12 @@ void FontWidget::rebuildFeaturesBar()
     updateFeaturePillsState();
     m_features_bar->show();
     m_features_pills_host->updateGeometry();
+    if (m_features_scroll) {
+        if (auto *vbar = m_features_scroll->verticalScrollBar()) {
+            vbar->setValue(0);
+        }
+        m_features_scroll->updateGeometry();
+    }
 }
 
 void FontWidget::updateFeaturePillsState()
@@ -1248,7 +1352,6 @@ void FontWidget::rebuildAxesBar(bool reset_to_defaults)
         ctrl.steps       = steps;
         ctrl.slider      = slider;
         ctrl.value       = val_lbl;
-        ctrl.reset       = reset_btn;
         m_axis_controls.append(ctrl);
 
         const QByteArray tag = ax.tag;
@@ -1294,7 +1397,8 @@ void FontWidget::setVariableAxisValue(const QByteArray &tag, float value)
         if (c.tag != tag) {
             continue;
         }
-        const float clamped = qBound(c.min_val, value, c.max_val);
+        const float finite  = qIsFinite(value) ? value : c.default_val;
+        const float clamped = qBound(c.min_val, finite, c.max_val);
         m_axis_values.insert(tag, clamped);
         if (c.slider) {
             QSignalBlocker blocker(c.slider);

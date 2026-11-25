@@ -90,10 +90,6 @@ public:
     QVector<QPushButton *> featurePillButtons() const;
 
     QVector<FontNameRecord> readNameRecords();
-    const FontInspectorEngine &inspectorEngine() const
-    {
-        return m_inspector;
-    }
     int currentFaceIndex() const
     {
         return m_face_index;
@@ -165,7 +161,6 @@ private:
         int steps         = 1;
         QSlider *slider   = nullptr;
         QLabel *value     = nullptr;
-        QPushButton *reset = nullptr;
     };
 
     FontInspectorEngine m_inspector;
@@ -192,6 +187,7 @@ private:
     QVBoxLayout *m_features_root   = nullptr;
     QLabel *m_features_note        = nullptr;
     QPushButton *m_features_reset  = nullptr;
+    QScrollArea *m_features_scroll = nullptr;
     QWidget *m_features_pills_host = nullptr;
 
     bool m_gdi_probed            = false;

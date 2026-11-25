@@ -102,8 +102,8 @@ target_link_libraries(test_fontviewer PRIVATE
     Qt6::Svg
 )
 
-# Offscreen regression suite for the viewer itself. Tests that need a real font
-# read its path from FONTVIEWER_TEST_FONT and skip when it is unset.
+# Offscreen regression suite for the viewer itself. Golden fonts live in
+# tests/fixtures and are resolved at runtime from FONTVIEWER_FIXTURES_DIR.
 add_executable(fontviewer_tests
     tests/viewer_tests.cpp
     $<TARGET_OBJECTS:fontviewer_core>

@@ -58,8 +58,6 @@ public:
         return m_preview_widget;
     }
 
-    Q_SIGNAL void sigShowOutlinePointsChanged(bool on);
-
 public slots:
     void updateFont(const QFont &font,
                     const FontDecorationMetrics &deco = {},
