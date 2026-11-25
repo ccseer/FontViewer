@@ -1,7 +1,11 @@
 #pragma once
 
 #include <QFont>
+#include <QRectF>
+#include <QVector>
 #include <QWidget>
+
+#include "fontinspectorengine.h"
 
 class QLabel;
 class QVBoxLayout;
@@ -16,7 +20,10 @@ class GlyphInspectorWidget : public QWidget {
 public:
     explicit GlyphInspectorWidget(QWidget *parent = nullptr);
 
-    void updateGlyph(QChar ch, const QFont &font, const QString &font_path);
+    void updateGlyph(QChar ch,
+                     const QFont &font,
+                     const QString &font_path,
+                     const FontDecorationMetrics &deco = {});
     void clearSelection();
     QPixmap getPreviewPixmap() const;
     bool hasSelection() const
@@ -27,9 +34,14 @@ public:
     {
         return m_char;
     }
+    const FontDecorationMetrics &decorationMetrics() const
+    {
+        return m_deco_metrics;
+    }
 
 public slots:
-    void updateFont(const QFont &font);
+    void updateFont(const QFont &font,
+                    const FontDecorationMetrics &deco = {});
     void updateTheme(int theme);
 
 private:
@@ -42,6 +54,7 @@ private:
     QChar m_char;
     QFont m_font;
     QString m_font_path;
+    FontDecorationMetrics m_deco_metrics;
     bool m_has_selection = false;
 
     // Metrics cache
@@ -67,6 +80,8 @@ private:
     QLabel *m_label_descent;
     QLabel *m_label_line_gap;
     QLabel *m_label_units_per_em;
+    QLabel *m_label_underline;
+    QLabel *m_label_strikeout;
     GlyphPreviewWidget *m_preview_widget;
     QLabel *m_label_no_selection;
     QGroupBox *m_group_unicode;
@@ -87,8 +102,22 @@ public:
     void setGlyphData(QChar ch,
                       const QFont &font,
                       const QRectF &bbox,
-                      qreal advance_width);
+                      qreal advance_width,
+                      const FontDecorationMetrics &deco = {});
     void clear();
+
+    QVector<QRectF> lastLabelRects() const
+    {
+        return m_last_label_rects;
+    }
+    QRectF lastUnderlineBand() const
+    {
+        return m_last_underline_band;
+    }
+    QRectF lastStrikeoutBand() const
+    {
+        return m_last_strikeout_band;
+    }
 
     QSize sizeHint() const override;
 
@@ -99,6 +128,10 @@ private:
     QChar m_char;
     QFont m_font;
     QRectF m_bbox;
+    FontDecorationMetrics m_deco_metrics;
     qreal m_advance_width = 0;
     bool m_has_data       = false;
+    mutable QVector<QRectF> m_last_label_rects;
+    mutable QRectF m_last_underline_band;
+    mutable QRectF m_last_strikeout_band;
 };

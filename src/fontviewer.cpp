@@ -8,7 +8,7 @@
 #include <QSettings>
 #include <QtMath>
 
-#include "fontinfo.h"
+#include "fontinspectorengine.h"
 #include "fontwidget.h"
 #include "seer/viewerhelper.h"
 
@@ -144,7 +144,15 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
 
 void FontViewer::loadFileInfo()
 {
-    const auto records = readFontNameTable(options()->path());
+    if (m_info_loaded) {
+        return;
+    }
+    m_info_loaded = true;
+
+    const auto records = m_view
+                             ? m_view->readNameRecords()
+                             : FontInspectorEngine::readNameRecords(
+                                   options()->path());
     if (records.isEmpty()) {
         return;
     }

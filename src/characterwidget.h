@@ -76,6 +76,10 @@ public:
         int square_size = 0;
     };
     SelectedCharInfo selectedCharInfo() const;
+    const QFont &currentFont() const
+    {
+        return m_ft;
+    }
 
 public slots:
     void updateFont(const QFont &font);

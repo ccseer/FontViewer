@@ -3,3 +3,10 @@ Copyright (C) 2024 Corey (https://1218.io)
 
 This software is the FontViewer Plugin for Seer — a multi-module file viewer
 for Windows. For more information, visit https://1218.io
+
+Third-Party Notices:
+
+- FreeType 2 (https://freetype.org)
+  Copyright (C) 1996-2024 by David Turner, Robert Wilhelm, and Werner Lemberg.
+  Licensed under the FreeType License (FTL). Portions of this software are
+  copyright (C) 2024 The FreeType Project (www.freetype.org). All rights reserved.

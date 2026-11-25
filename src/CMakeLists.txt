@@ -32,16 +32,29 @@ FetchContent_Declare(SeerSdk
 )
 FetchContent_MakeAvailable(SeerSdk)
 
+set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_PNG ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BROTLI ON CACHE BOOL "" FORCE)
+FetchContent_Declare(freetype
+    GIT_REPOSITORY https://github.com/freetype/freetype.git
+    GIT_TAG        VER-2-13-3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(freetype)
+
 # The viewer sources are compiled once and shared by the shipping DLL and the
 # test binary, so the tests exercise the exact objects that ship.
 set(FONTVIEWER_SOURCES
     characterwidget.cpp
+    fontinspectorengine.cpp
+    fontinspectorengine.h
     fontpreviewedit.cpp
     fontpreviewedit.h
     fontviewer.cpp
     fontwidget.cpp
     fontwidget.ui
-    fontinfo.cpp
     glyphinspectorwidget.cpp
     waterfallwidget.cpp
     waterfallwidget.h
@@ -52,6 +65,7 @@ add_library(fontviewer_core OBJECT ${FONTVIEWER_SOURCES})
 target_include_directories(fontviewer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(fontviewer_core PRIVATE
     SeerSdk::SeerSdk
+    freetype
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -65,6 +79,7 @@ target_compile_definitions(fontviewer_core PRIVATE
 add_library(fontviewer SHARED $<TARGET_OBJECTS:fontviewer_core>)
 target_link_libraries(fontviewer PRIVATE
     SeerSdk::SeerSdk
+    freetype
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -94,8 +109,12 @@ add_executable(fontviewer_tests
     $<TARGET_OBJECTS:fontviewer_core>
 )
 target_include_directories(fontviewer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(fontviewer_tests PRIVATE
+    FONTVIEWER_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+)
 target_link_libraries(fontviewer_tests PRIVATE
     SeerSdk::SeerSdk
+    freetype
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets

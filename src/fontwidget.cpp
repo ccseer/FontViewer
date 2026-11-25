@@ -8,9 +8,11 @@
 #include <QColor>
 #include <QClipboard>
 #include <QFontDatabase>
+#include <QFontMetricsF>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QLabel>
 #include <QListView>
 #include <QPainter>
@@ -127,6 +129,47 @@ void configureComboBox(QComboBox *cb)
     list->verticalScrollBar()->setProperty("is_readonly", true);
     cb->setView(list);
     cb->setFocusPolicy(Qt::NoFocus);
+}
+
+int axisStepsForRange(float min_val, float max_val)
+{
+    const double span = double(max_val) - double(min_val);
+    if (span <= 0.0) {
+        return 1;
+    }
+    if (span <= 100.0) {
+        return 200;
+    }
+    return qBound(200, qRound(span), 1000);
+}
+
+float axisValueFromSlider(float min_val, float max_val, int steps, int pos)
+{
+    if (steps <= 0 || max_val <= min_val) {
+        return min_val;
+    }
+    return min_val + (max_val - min_val) * (float(pos) / float(steps));
+}
+
+int axisSliderFromValue(float min_val, float max_val, int steps, float val)
+{
+    if (steps <= 0 || max_val <= min_val) {
+        return 0;
+    }
+    const float t = qBound(0.0f, (val - min_val) / (max_val - min_val), 1.0f);
+    return qRound(t * steps);
+}
+
+QString formatAxisValue(float val, float min_val, float max_val)
+{
+    const float span = max_val - min_val;
+    if (span <= 20.0f) {
+        return QString::number(val, 'f', 2);
+    }
+    if (qAbs(val - qRound(val)) < 0.05f) {
+        return QString::number(qRound(val));
+    }
+    return QString::number(val, 'f', 1);
 }
 
 // Keeps the Text tab toolbar on a single row and moves line height and letter
@@ -296,6 +339,7 @@ FontWidget::FontWidget(QWidget *parent)
 
 FontWidget::~FontWidget()
 {
+    m_inspector.close();
     releaseApplicationFont();
     delete ui;
     qprintt << "~" << this;
@@ -398,6 +442,10 @@ void FontWidget::initUI(const QStringList &names_raw)
     ui->tabWidget->setCornerWidget(corner);
     connect(ui->tabWidget, &QTabWidget::currentChanged, this,
             &FontWidget::onTabChanged);
+
+    // Move tabWidget below the variable-axes bar row.
+    ui->gridLayout->addWidget(ui->tabWidget, 2, 0);
+    initAxesBar();
 
     initTextTab();
     initSampleTab();
@@ -631,6 +679,7 @@ void FontWidget::initCharTab()
     wnd_char_sa->setFocusPolicy(Qt::NoFocus);
     wnd_char_sa->setWidget(m_wnd_char);
     ui->tabWidget->addTab(wnd_char_sa, "Characters");
+    m_tab_char = wnd_char_sa;
     m_wnd_char->installEventFilter(this);
 }
 
@@ -648,9 +697,12 @@ void FontWidget::initGlyphTab()
     connect(m_wnd_char, &CharacterWidget::selectionChanged, this,
             [this](QChar ch) {
                 const int pt = getCurrentFontSize();
+                const FontDecorationMetrics deco
+                    = m_inspector.decorationMetrics(m_face_index, m_axis_values);
                 m_wnd_gi->updateGlyph(ch,
                                       buildPreviewFont(pt, PreviewFontRole::Glyph),
-                                      m_font_path);
+                                      m_font_path, deco);
+                m_gi_dirty = false;
 
                 // Update tab title with character code
                 int tab_index = ui->tabWidget->indexOf(m_tab_gi);
@@ -679,13 +731,349 @@ void FontWidget::initGlyphTab()
             });
 }
 
+void FontWidget::initAxesBar()
+{
+    m_axis_timer = new QTimer(this);
+    m_axis_timer->setSingleShot(true);
+    m_axis_timer->setInterval(16);
+    connect(m_axis_timer, &QTimer::timeout, this,
+            &FontWidget::refreshActiveTabFromAxes);
+
+    m_axes_bar = new QWidget(this);
+    m_axes_bar->setFocusPolicy(Qt::NoFocus);
+    m_axes_root = new QVBoxLayout(m_axes_bar);
+    m_axes_root->setContentsMargins(0, 2, 0, 2);
+    m_axes_root->setSpacing(4);
+
+    m_axes_warning = new QLabel(
+        tr("Variable font axes may be inactive under the current font backend."),
+        m_axes_bar);
+    m_axes_warning->setWordWrap(true);
+    m_axes_warning->setFocusPolicy(Qt::NoFocus);
+    m_axes_warning->hide();
+    m_axes_root->addWidget(m_axes_warning);
+
+    m_axes_rows_host = new QWidget(m_axes_bar);
+    m_axes_rows_host->setFocusPolicy(Qt::NoFocus);
+    m_axes_grid = new QGridLayout(m_axes_rows_host);
+    m_axes_grid->setContentsMargins(0, 0, 0, 0);
+    m_axes_grid->setHorizontalSpacing(8);
+    m_axes_grid->setVerticalSpacing(4);
+    m_axes_grid->setColumnStretch(1, 1);
+    m_axes_root->addWidget(m_axes_rows_host);
+
+    m_axes_bar->hide();
+    ui->gridLayout->addWidget(m_axes_bar, 1, 0);
+}
+
+void FontWidget::rebuildAxesBar(bool reset_to_defaults)
+{
+    if (!m_axes_bar || !m_axes_grid) {
+        return;
+    }
+
+    if (m_axis_timer) {
+        m_axis_timer->stop();
+    }
+
+    for (const AxisControl &ctrl : m_axis_controls) {
+        if (ctrl.slider) {
+            ctrl.slider->removeEventFilter(this);
+        }
+    }
+    m_axis_controls.clear();
+
+    while (QLayoutItem *item = m_axes_grid->takeAt(0)) {
+        if (QWidget *w = item->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
+        delete item;
+    }
+
+    const auto &axes = m_inspector.inspectFace(m_face_index).variable_axes;
+    if (axes.isEmpty()) {
+        m_axis_values.clear();
+        m_axes_warning->hide();
+        m_axes_bar->hide();
+        return;
+    }
+
+    QHash<QByteArray, float> next_values;
+    for (int row = 0; row < axes.size(); ++row) {
+        const FontVariableAxisInfo &ax = axes[row];
+        float cur_val                  = ax.default_value;
+        if (!reset_to_defaults && m_axis_values.contains(ax.tag)) {
+            cur_val = qBound(ax.min_value, m_axis_values.value(ax.tag),
+                             ax.max_value);
+        }
+        next_values.insert(ax.tag, cur_val);
+
+        const QString title
+            = (ax.name == QString::fromLatin1(ax.tag))
+                  ? ax.name
+                  : QStringLiteral("%1 (%2)").arg(
+                        ax.name, QString::fromLatin1(ax.tag));
+        auto *name_lbl = new QLabel(title, m_axes_rows_host);
+        name_lbl->setFocusPolicy(Qt::NoFocus);
+
+        const int steps = axisStepsForRange(ax.min_value, ax.max_value);
+        auto *slider    = new QSlider(Qt::Horizontal, m_axes_rows_host);
+        slider->setRange(0, steps);
+        slider->setValue(
+            axisSliderFromValue(ax.min_value, ax.max_value, steps, cur_val));
+        slider->setFocusPolicy(Qt::NoFocus);
+        slider->setEnabled(ax.max_value > ax.min_value);
+        slider->installEventFilter(this);
+
+        auto *val_lbl = new QLabel(
+            formatAxisValue(cur_val, ax.min_value, ax.max_value),
+            m_axes_rows_host);
+        val_lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        val_lbl->setMinimumWidth(
+            QFontMetrics(val_lbl->font())
+                .horizontalAdvance(QStringLiteral("-1000.00"))
+            + 4);
+        val_lbl->setFocusPolicy(Qt::NoFocus);
+
+        auto *reset_btn = new QPushButton(tr("Reset"), m_axes_rows_host);
+        reset_btn->setFlat(true);
+        reset_btn->setCursor(Qt::PointingHandCursor);
+        reset_btn->setFocusPolicy(Qt::NoFocus);
+        reset_btn->setToolTip(
+            tr("Reset %1 to default (%2)")
+                .arg(title, formatAxisValue(ax.default_value, ax.min_value,
+                                            ax.max_value)));
+
+        m_axes_grid->addWidget(name_lbl, row, 0);
+        m_axes_grid->addWidget(slider, row, 1);
+        m_axes_grid->addWidget(val_lbl, row, 2);
+        m_axes_grid->addWidget(reset_btn, row, 3);
+
+        AxisControl ctrl;
+        ctrl.tag         = ax.tag;
+        ctrl.min_val     = ax.min_value;
+        ctrl.default_val = ax.default_value;
+        ctrl.max_val     = ax.max_value;
+        ctrl.steps       = steps;
+        ctrl.slider      = slider;
+        ctrl.value       = val_lbl;
+        ctrl.reset       = reset_btn;
+        m_axis_controls.append(ctrl);
+
+        const QByteArray tag = ax.tag;
+        connect(slider, &QSlider::sliderPressed, this,
+                [this]() { clearViewerFocus(); });
+        connect(slider, &QSlider::valueChanged, this, [this, tag](int pos) {
+            for (const AxisControl &c : m_axis_controls) {
+                if (c.tag == tag) {
+                    const float v = axisValueFromSlider(c.min_val, c.max_val,
+                                                        c.steps, pos);
+                    m_axis_values.insert(tag, v);
+                    if (c.value) {
+                        c.value->setText(
+                            formatAxisValue(v, c.min_val, c.max_val));
+                    }
+                    break;
+                }
+            }
+            clearViewerFocus();
+            if (m_axis_timer && !m_axis_timer->isActive()) {
+                m_axis_timer->start();
+            }
+        });
+        connect(reset_btn, &QPushButton::clicked, this, [this, tag]() {
+            for (const AxisControl &c : m_axis_controls) {
+                if (c.tag == tag) {
+                    setVariableAxisValue(tag, c.default_val);
+                    break;
+                }
+            }
+            clearViewerFocus();
+        });
+    }
+
+    m_axis_values = std::move(next_values);
+    m_axes_bar->show();
+    probeVariableAxisBackend();
+}
+
+void FontWidget::setVariableAxisValue(const QByteArray &tag, float value)
+{
+    for (const AxisControl &c : m_axis_controls) {
+        if (c.tag != tag) {
+            continue;
+        }
+        const float clamped = qBound(c.min_val, value, c.max_val);
+        m_axis_values.insert(tag, clamped);
+        if (c.slider) {
+            QSignalBlocker blocker(c.slider);
+            c.slider->setValue(
+                axisSliderFromValue(c.min_val, c.max_val, c.steps, clamped));
+        }
+        if (c.value) {
+            c.value->setText(formatAxisValue(clamped, c.min_val, c.max_val));
+        }
+        if (m_axis_timer) {
+            m_axis_timer->stop();
+        }
+        refreshActiveTabFromAxes();
+        return;
+    }
+}
+
+void FontWidget::syncAxesForStyle(const QString &style)
+{
+    std::optional<FontNamedInstance> inst;
+    if (ui && ui->comboBox_family) {
+        // DirectWrite also registers named instances as standalone family names
+        // (e.g. family "Roboto Condensed" with style "Regular"). Match the
+        // family's subfamily suffix before falling back to bare style so
+        // "Regular" under "Roboto Condensed" resolves to "Condensed Regular".
+        const QString fam = ui->comboBox_family->currentText();
+        QString suffix;
+        for (const auto &rec : m_inspector.inspectFace(m_face_index).name_records) {
+            if (rec.label == QLatin1String("Family")
+                || rec.label == QLatin1String("Typographic Family")) {
+                if (fam.startsWith(rec.value + QLatin1Char(' '),
+                                   Qt::CaseInsensitive)) {
+                    suffix = fam.mid(rec.value.size()).trimmed();
+                    break;
+                }
+            }
+        }
+        if (!suffix.isEmpty()) {
+            if (FontInspectorEngine::normalizeStyleName(style)
+                == QLatin1String("regular")) {
+                inst = m_inspector.matchNamedInstance(m_face_index, suffix);
+            }
+            else {
+                inst = m_inspector.matchNamedInstance(
+                    m_face_index, suffix + QLatin1Char(' ') + style);
+                if (!inst.has_value()) {
+                    inst = m_inspector.matchNamedInstance(m_face_index, suffix);
+                }
+            }
+        }
+    }
+    if (!inst.has_value()) {
+        inst = m_inspector.matchNamedInstance(m_face_index, style);
+    }
+    if (!inst.has_value()) {
+        return;
+    }
+    const auto &axes = m_inspector.inspectFace(m_face_index).variable_axes;
+    const int n      = qMin(axes.size(), inst->coords.size());
+    for (int i = 0; i < n; ++i) {
+        const QByteArray &tag = axes[i].tag;
+        const float val
+            = qBound(axes[i].min_value, inst->coords[i], axes[i].max_value);
+        m_axis_values.insert(tag, val);
+        for (const AxisControl &c : m_axis_controls) {
+            if (c.tag == tag) {
+                if (c.slider) {
+                    QSignalBlocker blocker(c.slider);
+                    c.slider->setValue(axisSliderFromValue(c.min_val, c.max_val,
+                                                           c.steps, val));
+                }
+                if (c.value) {
+                    c.value->setText(
+                        formatAxisValue(val, c.min_val, c.max_val));
+                }
+                break;
+            }
+        }
+    }
+}
+
+void FontWidget::probeVariableAxisBackend()
+{
+    if (!m_axes_warning) {
+        return;
+    }
+    if (m_gdi_probed) {
+        m_axes_warning->setVisible(m_gdi_inactive);
+        return;
+    }
+
+    const auto &axes = m_inspector.inspectFace(m_face_index).variable_axes;
+    const FontVariableAxisInfo *probe_axis = nullptr;
+    for (const FontVariableAxisInfo &ax : axes) {
+        if (ax.min_value < ax.max_value) {
+            probe_axis = &ax;
+            break;
+        }
+    }
+    if (!probe_axis) {
+        m_axes_warning->hide();
+        return;
+    }
+
+    const auto tag = QFont::Tag::fromString(probe_axis->tag);
+    if (!tag.has_value()) {
+        m_axes_warning->hide();
+        return;
+    }
+
+    m_gdi_probed      = true;
+    const QString fam = ui->comboBox_family->currentText();
+    QFont f_min(fam);
+    QFont f_max(fam);
+    f_min.setPointSize(48);
+    f_max.setPointSize(48);
+    f_min.setVariableAxis(*tag, probe_axis->min_value);
+    f_max.setVariableAxis(*tag, probe_axis->max_value);
+
+    QString sample = m_inspector.probeSampleForFace(m_face_index);
+    if (sample.isEmpty()) {
+        sample = QStringLiteral("Hamburgefonstiv");
+    }
+    const qreal w_min    = QFontMetricsF(f_min, this).horizontalAdvance(sample);
+    const qreal w_max    = QFontMetricsF(f_max, this).horizontalAdvance(sample);
+
+    bool same = (qAbs(w_min - w_max) < 0.05);
+    if (same) {
+        auto render_probe = [&sample](const QFont &f) {
+            QImage img(160, 64, QImage::Format_ARGB32_Premultiplied);
+            img.fill(Qt::white);
+            QPainter p(&img);
+            p.setRenderHint(QPainter::TextAntialiasing, true);
+            p.setFont(f);
+            p.setPen(Qt::black);
+            p.drawText(QPointF(8.0, 46.0), sample);
+            p.end();
+            return img;
+        };
+        same = (render_probe(f_min) == render_probe(f_max));
+    }
+
+    m_gdi_inactive = same;
+    m_axes_warning->setVisible(m_gdi_inactive);
+}
+
+QVector<FontNameRecord> FontWidget::readNameRecords()
+{
+    if (!m_inspector.isValid() && !m_font_path.isEmpty()) {
+        m_inspector.openFile(m_font_path);
+    }
+    if (!m_inspector.isValid()) {
+        return {};
+    }
+    const int face = qBound(0, m_face_index, m_inspector.faceCount() - 1);
+    return m_inspector.inspectFace(face).name_records;
+}
+
 bool FontWidget::init(const QString &p)
 {
     // An instance binds one font, but a repeated init() must not leak the
     // previous registration.
     releaseApplicationFont();
-    m_font_path = p;
-    m_font_id   = QFontDatabase::addApplicationFont(p);
+    m_font_path    = p;
+    m_face_index   = 0;
+    m_gdi_probed   = false;
+    m_gdi_inactive = false;
+    m_inspector.openFile(p);
+    m_font_id = QFontDatabase::addApplicationFont(p);
     if (-1 == m_font_id) {
         qprintt << "addApplicationFont err";
         return false;
@@ -700,8 +1088,8 @@ bool FontWidget::init(const QString &p)
     // init data after initUI
     m_wnd_char->init(p);
 
-    onTabChanged();
     onNameChanged();
+    onTabChanged();
     updateTheme(m_theme);
     clearViewerFocus();
     return true;
@@ -722,13 +1110,44 @@ QFont FontWidget::buildPreviewFont(int pt_size, PreviewFontRole role) const
 
     QFont ft(name);
     ft.setPointSize(qMax(1, pt_size));
-    // doesn't work: https://bugreports.qt.io/browse/QTBUG-69499
-    // ft.setStyleName(ui->comboBox_style->currentText());
-    if (auto weight = QFontDatabase::weight(name, style); weight != -1) {
-        ft.setWeight(QFont::Weight(weight));
+
+    const auto &axes = m_inspector.inspectFace(m_face_index).variable_axes;
+    if (axes.isEmpty()) {
+        // doesn't work: https://bugreports.qt.io/browse/QTBUG-69499
+        // ft.setStyleName(ui->comboBox_style->currentText());
+        if (auto weight = QFontDatabase::weight(name, style); weight != -1) {
+            ft.setWeight(QFont::Weight(weight));
+        }
+        // there are things like Demi-Italic exists, but we can't support these
+        ft.setItalic(QFontDatabase::italic(name, style));
     }
-    // there are things like Demi-Italic exists, but we can't support these
-    ft.setItalic(QFontDatabase::italic(name, style));
+    else {
+        bool has_wght         = false;
+        bool has_ital_or_slnt = false;
+        for (const FontVariableAxisInfo &ax : axes) {
+            if (ax.tag == QByteArrayLiteral("wght")) {
+                has_wght = true;
+            }
+            if (ax.tag == QByteArrayLiteral("ital")
+                || ax.tag == QByteArrayLiteral("slnt")) {
+                has_ital_or_slnt = true;
+            }
+            const float val = m_axis_values.value(ax.tag, ax.default_value);
+            if (const auto tag = QFont::Tag::fromString(ax.tag);
+                tag.has_value()) {
+                ft.setVariableAxis(*tag, val);
+            }
+        }
+        if (!has_wght) {
+            if (auto weight = QFontDatabase::weight(name, style);
+                weight != -1) {
+                ft.setWeight(QFont::Weight(weight));
+            }
+        }
+        if (!has_ital_or_slnt) {
+            ft.setItalic(QFontDatabase::italic(name, style));
+        }
+    }
 
     if (role == PreviewFontRole::Text && !qFuzzyIsNull(m_letter_spacing)) {
         ft.setLetterSpacing(QFont::AbsoluteSpacing, m_letter_spacing);
@@ -977,11 +1396,24 @@ void FontWidget::onNameChanged()
     }
     ui->comboBox_style->setEnabled(styles.size() > 1);
 
+    m_face_index = m_inspector.resolveFaceIndex(
+        name, ui->comboBox_style->currentText());
+    rebuildAxesBar(true);
+
     onStyleChanged();
 }
 
 void FontWidget::onStyleChanged()
 {
+    const QString name  = ui->comboBox_family->currentText();
+    const QString style = ui->comboBox_style->currentText();
+    const int new_face  = m_inspector.resolveFaceIndex(name, style);
+    if (new_face != m_face_index) {
+        m_face_index = new_face;
+        rebuildAxesBar(false);
+    }
+    syncAxesForStyle(style);
+
     // if the size is smooth, make the item bold.
     // unless they are the same, no need to bold all items.
     QFont ft           = this->font();
@@ -990,8 +1422,7 @@ void FontWidget::onStyleChanged()
         ui->comboBox_sz->setItemData(i, QVariant(ft), Qt::FontRole);
     }
 
-    const auto pt_sz = QFontDatabase::smoothSizes(
-        ui->comboBox_family->currentText(), ui->comboBox_style->currentText());
+    const auto pt_sz = QFontDatabase::smoothSizes(name, style);
 
     if (pt_sz.size() != cb_sz_t) {
         ft.setBold(true);
@@ -1071,13 +1502,102 @@ void FontWidget::onTabChanged()
         m_btn_aa->setChecked(false);
     }
     if (cur_wnd == ui->tab_text) {
-        updateTabTextPreview();
+        if (m_text_dirty) {
+            refreshTextWidgetsFromFont();
+            m_text_dirty = false;
+        }
+        else {
+            updateTabTextPreview();
+        }
         if (m_stack) {
             m_stack->setCurrentIndex(m_waterfall_enabled ? 1 : 0);
         }
     }
     else if (cur_wnd == ui->tab_sample) {
-        updateSamplePreview();
+        if (m_sample_dirty && ui->label_sample) {
+            ui->label_sample->setFont(
+                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Text));
+            m_sample_dirty = false;
+        }
+        else {
+            updateSamplePreview();
+        }
+    }
+    else if (cur_wnd == m_tab_char && m_char_dirty) {
+        if (m_wnd_char) {
+            m_wnd_char->updateFont(
+                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Glyph));
+        }
+        m_char_dirty = false;
+    }
+    else if (cur_wnd == m_tab_gi && m_gi_dirty) {
+        refreshGlyphInspectorFromFont();
+        m_gi_dirty = false;
+    }
+}
+
+void FontWidget::refreshTextWidgetsFromFont()
+{
+    if (!m_edit) {
+        return;
+    }
+    const int pt          = getCurrentFontSize();
+    const QFont text_font = buildPreviewFont(pt, PreviewFontRole::Text);
+    m_edit->setFont(text_font);
+    syncWaterfall();
+    if (m_waterfall) {
+        m_waterfall->refreshFont();
+    }
+    if (m_waterfall_enabled) {
+        m_waterfall_needs_scroll = true;
+        ensureWaterfallRowVisible(pt);
+        if (m_waterfall_needs_scroll) {
+            ensureWaterfallRowVisibleLater();
+        }
+    }
+}
+
+void FontWidget::refreshGlyphInspectorFromFont()
+{
+    if (!m_wnd_gi) {
+        return;
+    }
+    const int pt           = getCurrentFontSize();
+    const QFont glyph_font = buildPreviewFont(pt, PreviewFontRole::Glyph);
+    const FontDecorationMetrics deco
+        = m_inspector.decorationMetrics(m_face_index, m_axis_values);
+    m_wnd_gi->updateFont(glyph_font, deco);
+}
+
+void FontWidget::refreshActiveTabFromAxes()
+{
+    m_text_dirty   = true;
+    m_sample_dirty = true;
+    m_char_dirty   = true;
+    m_gi_dirty     = true;
+
+    auto cur_wnd = ui->tabWidget->currentWidget();
+    if (cur_wnd == ui->tab_text) {
+        refreshTextWidgetsFromFont();
+        m_text_dirty = false;
+    }
+    else if (cur_wnd == ui->tab_sample) {
+        if (ui->label_sample) {
+            ui->label_sample->setFont(
+                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Text));
+        }
+        m_sample_dirty = false;
+    }
+    else if (cur_wnd == m_tab_char) {
+        if (m_wnd_char) {
+            m_wnd_char->updateFont(
+                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Glyph));
+        }
+        m_char_dirty = false;
+    }
+    else if (cur_wnd == m_tab_gi) {
+        refreshGlyphInspectorFromFont();
+        m_gi_dirty = false;
     }
 }
 
@@ -1086,19 +1606,32 @@ void FontWidget::updateTabTextPreview()
     if (!m_edit || !m_wnd_char) {
         return;
     }
-    const int pt = getCurrentFontSize();
+    const int pt           = getCurrentFontSize();
     const QFont text_font  = buildPreviewFont(pt, PreviewFontRole::Text);
     const QFont glyph_font = buildPreviewFont(pt, PreviewFontRole::Glyph);
 
     m_edit->setFont(text_font);
-    m_wnd_char->updateFont(glyph_font);
+    m_text_dirty = false;
+
+    if (ui->tabWidget->currentWidget() == m_tab_char) {
+        m_wnd_char->updateFont(glyph_font);
+        m_char_dirty = false;
+    }
+    else {
+        m_char_dirty = true;
+    }
+
     if (m_wnd_gi) {
-        m_wnd_gi->updateFont(glyph_font);
+        const FontDecorationMetrics deco
+            = m_inspector.decorationMetrics(m_face_index, m_axis_values);
+        m_wnd_gi->updateFont(glyph_font, deco);
+        m_gi_dirty = false;
     }
     // The Sample tab shares the family/style/size state; only its text differs,
     // so refresh the font here instead of waiting for the next family change.
     if (ui->label_sample) {
         ui->label_sample->setFont(text_font);
+        m_sample_dirty = false;
     }
 
     syncWaterfall();
@@ -1343,9 +1876,17 @@ bool FontWidget::eventFilter(QObject *watched, QEvent *event)
     if (event->type() == QEvent::Wheel) {
         auto *wheel = static_cast<QWheelEvent *>(event);
 
-        if (watched == m_slider_line || watched == m_slider_space
-            || watched == m_combo_preset || watched == ui->comboBox_family
-            || watched == ui->comboBox_style || watched == ui->comboBox_sz) {
+        bool is_axis_slider = false;
+        for (const AxisControl &c : m_axis_controls) {
+            if (watched == c.slider) {
+                is_axis_slider = true;
+                break;
+            }
+        }
+        if (is_axis_slider || watched == m_slider_line
+            || watched == m_slider_space || watched == m_combo_preset
+            || watched == ui->comboBox_family || watched == ui->comboBox_style
+            || watched == ui->comboBox_sz) {
             // Steppers, sliders and combos change their value on a hover wheel
             // even without focus; only swallowing the event keeps them stable.
             wheel->accept();

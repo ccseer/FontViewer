@@ -1,30 +1,121 @@
 #include "glyphinspectorwidget.h"
 
 #include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QPainter>
 #include <QRawFont>
 #include <QVBoxLayout>
+#include <QtMath>
+
+#include <optional>
 
 #define qprintt qDebug() << "[GlyphInspector]"
+
+namespace {
+QRectF placeNonOverlappingLabel(const QRectF &preferred,
+                                const QRectF &bounds,
+                                qreal step_y,
+                                const QVector<QRectF> &occupied)
+{
+    auto clamp_rect = [&bounds](QRectF r) {
+        if (r.left() < bounds.left()) {
+            r.moveLeft(bounds.left());
+        }
+        if (r.right() > bounds.right()) {
+            r.moveRight(bounds.right());
+        }
+        if (r.top() < bounds.top()) {
+            r.moveTop(bounds.top());
+        }
+        if (r.bottom() > bounds.bottom()) {
+            r.moveBottom(bounds.bottom());
+        }
+        return r;
+    };
+
+    auto overlaps = [&occupied](const QRectF &r) {
+        for (const QRectF &occ : occupied) {
+            if (r.intersects(occ)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    QRectF candidate = clamp_rect(preferred);
+    if (!overlaps(candidate)) {
+        return candidate;
+    }
+
+    const qreal dir     = (step_y >= 0.0) ? 1.0 : -1.0;
+    const qreal mag     = qMax(4.0, qAbs(step_y));
+    const int max_steps = qMax(16, int(qCeil(bounds.height() / mag)) + 1);
+    auto try_vertical   = [&](const QRectF &origin) -> std::optional<QRectF> {
+        const QRectF base = clamp_rect(origin);
+        if (!overlaps(base)) {
+            return base;
+        }
+        for (int i = 1; i <= max_steps; ++i) {
+            QRectF shifted = origin;
+            shifted.translate(0.0, dir * mag * i);
+            shifted = clamp_rect(shifted);
+            if (!overlaps(shifted)) {
+                return shifted;
+            }
+        }
+        for (int i = 1; i <= max_steps; ++i) {
+            QRectF shifted = origin;
+            shifted.translate(0.0, -dir * mag * i);
+            shifted = clamp_rect(shifted);
+            if (!overlaps(shifted)) {
+                return shifted;
+            }
+        }
+        return std::nullopt;
+    };
+
+    if (const auto r = try_vertical(preferred)) {
+        return *r;
+    }
+    for (int col = 1; col <= 3; ++col) {
+        const qreal dx = (preferred.width() + 6.0) * col;
+        if (const auto r = try_vertical(preferred.translated(-dx, 0.0))) {
+            return *r;
+        }
+        if (const auto r = try_vertical(preferred.translated(dx, 0.0))) {
+            return *r;
+        }
+    }
+    return candidate;
+}
+
+void configureValueLabel(QLabel *label)
+{
+    label->setWordWrap(true);
+    label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+}
+}  // namespace
 
 // GlyphPreviewWidget implementation
 GlyphPreviewWidget::GlyphPreviewWidget(QWidget *parent) : QWidget(parent)
 {
-    setMinimumSize(300, 300);
+    setMinimumSize(260, 280);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 
 void GlyphPreviewWidget::setGlyphData(QChar ch,
                                       const QFont &font,
                                       const QRectF &bbox,
-                                      qreal advance_width)
+                                      qreal advance_width,
+                                      const FontDecorationMetrics &deco)
 {
     m_char          = ch;
     m_font          = font;
     m_bbox          = bbox;
+    m_deco_metrics  = deco;
     m_advance_width = advance_width;
     m_has_data      = true;
     update();
@@ -33,6 +124,9 @@ void GlyphPreviewWidget::setGlyphData(QChar ch,
 void GlyphPreviewWidget::clear()
 {
     m_has_data = false;
+    m_last_label_rects.clear();
+    m_last_underline_band = {};
+    m_last_strikeout_band = {};
     update();
 }
 
@@ -44,6 +138,10 @@ QSize GlyphPreviewWidget::sizeHint() const
 void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
 {
     Q_UNUSED(event);
+
+    m_last_label_rects.clear();
+    m_last_underline_band = {};
+    m_last_strikeout_band = {};
 
     QPainter painter(this);
     painter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
@@ -64,8 +162,16 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
 
     // Setup display font
     QFont display_font = m_font;
-    display_font.setPointSize(qMax(72.0, m_font.pointSize() * 4.0));
-    QFontMetricsF display_fm(display_font);
+    if (m_font.pointSizeF() > 0.0) {
+        display_font.setPointSizeF(qMax(72.0, m_font.pointSizeF() * 4.0));
+    }
+    else if (m_font.pixelSize() > 0) {
+        display_font.setPixelSize(qMax(96, m_font.pixelSize() * 4));
+    }
+    else {
+        display_font.setPointSizeF(72.0);
+    }
+    QFontMetricsF display_fm(display_font, this);
 
     // Get strict metrics from QRawFont at display size to ensure consistency
     QRawFont display_raw = QRawFont::fromFont(display_font);
@@ -94,9 +200,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     qreal text_y = center_y + (display_ascent - display_descent) / 2.0;
 
     if (!use_strict) {
-        // Fallback: Calculate scaling ratio between base font and display font
-        // if QRawFont is not available for the display size
-        QFontMetricsF base_fm(m_font);
+        QFontMetricsF base_fm(m_font, this);
         qreal sx = base_fm.horizontalAdvance(m_char) > 0
                        ? qreal(display_fm.horizontalAdvance(m_char))
                              / base_fm.horizontalAdvance(m_char)
@@ -119,6 +223,59 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     painter.fillRect(
         QRectF(text_x, 20.0, display_advance, rect.height() - 40.0),
         QColor(200, 100, 255, 10));
+
+    // Derive em pixel size from the same font size source used to draw the glyph.
+    qreal em_px = 0.0;
+    if (display_font.pointSizeF() > 0.0) {
+        em_px = display_font.pointSizeF() * display_fm.fontDpi() / 72.0;
+    }
+    else if (display_raw.isValid() && display_raw.pixelSize() > 0.0) {
+        em_px = display_raw.pixelSize();
+    }
+
+    const int upem         = m_deco_metrics.units_per_em;
+    const qreal band_width = qMax(0.0, rect.width() - 20.0);
+    qreal underline_top_y  = 0.0;
+    bool draw_underline    = false;
+    qreal strike_top_y     = 0.0;
+    bool draw_strikeout    = false;
+
+    if (upem > 0 && em_px > 0.0 && band_width > 0.0) {
+        if (m_deco_metrics.has_underline) {
+            underline_top_y
+                = text_y
+                  - (qreal(m_deco_metrics.underline_pos) / upem) * em_px;
+            const qreal band_h = qMax(
+                1.0, (qreal(m_deco_metrics.underline_thick) / upem) * em_px);
+            const QRectF ul_rect(10.0, underline_top_y, band_width, band_h);
+            painter.fillRect(ul_rect, QColor(70, 160, 255, 38));
+            QPen ul_pen(QColor(70, 160, 255, 190));
+            ul_pen.setStyle(Qt::DashLine);
+            ul_pen.setWidthF(1.0);
+            painter.setPen(ul_pen);
+            painter.drawLine(QPointF(10.0, underline_top_y),
+                             QPointF(rect.width() - 10.0, underline_top_y));
+            m_last_underline_band = ul_rect;
+            draw_underline        = true;
+        }
+        if (m_deco_metrics.has_strikeout) {
+            strike_top_y
+                = text_y
+                  - (qreal(m_deco_metrics.strikeout_pos) / upem) * em_px;
+            const qreal band_h = qMax(
+                1.0, (qreal(m_deco_metrics.strikeout_size) / upem) * em_px);
+            const QRectF st_rect(10.0, strike_top_y, band_width, band_h);
+            painter.fillRect(st_rect, QColor(255, 120, 80, 38));
+            QPen st_pen(QColor(255, 120, 80, 190));
+            st_pen.setStyle(Qt::DashLine);
+            st_pen.setWidthF(1.0);
+            painter.setPen(st_pen);
+            painter.drawLine(QPointF(10.0, strike_top_y),
+                             QPointF(rect.width() - 10.0, strike_top_y));
+            m_last_strikeout_band = st_rect;
+            draw_strikeout        = true;
+        }
+    }
 
     // Draw baseline (dashed line) - horizontal through text baseline
     QPen baseline_pen(pal.mid().color());
@@ -201,58 +358,97 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     painter.setPen(pal.text().color());
     painter.drawText(QPointF(text_x, text_y), QString(m_char));
 
-    // Draw labels with better safety margins and alignment
-    QFont label_font = painter.font();
+    // Draw metric labels measured against the widget font and kept within
+    // bounds without overlapping each other.
+    QFont label_font = this->font();
     label_font.setPointSize(8);
     painter.setFont(label_font);
+    const QFontMetricsF label_fm(label_font, this);
+    const QRectF safe_bounds = QRectF(rect).adjusted(4.0, 4.0, -4.0, -4.0);
+    QVector<QRectF> occupied_labels;
 
     auto drawMetricLabel = [&](qreal y, const QString &text, QColor color,
                                bool isAbove) {
+        const qreal h = qCeil(label_fm.height()) + 2.0;
+        if (safe_bounds.width() <= 4.0 || safe_bounds.height() < h) {
+            return;
+        }
+        const QString elided = label_fm.elidedText(
+            text, Qt::ElideRight, qMax(1.0, safe_bounds.width() - 4.0));
+        const qreal w = qMin(safe_bounds.width(),
+                             label_fm.horizontalAdvance(elided) + 4.0);
+        const qreal x = qMax(safe_bounds.left(), safe_bounds.right() - w);
+        const QRectF preferred(x, isAbove ? y - h - 1.0 : y + 1.0, w, h);
+        const QRectF r = placeNonOverlappingLabel(
+            preferred, safe_bounds, isAbove ? -(h + 2.0) : (h + 2.0),
+            occupied_labels);
+
+        occupied_labels.append(r);
+        m_last_label_rects.append(r);
         painter.setPen(color);
-        qreal w = 100.0;
-        qreal h = 25.0;
-        qreal x = rect.width() - w - 5.0;
-        QRectF r(x, isAbove ? y - h : y, w, h);
-        painter.drawText(
-            r, Qt::AlignRight | (isAbove ? Qt::AlignBottom : Qt::AlignTop),
-            text);
+        painter.drawText(r, Qt::AlignRight | Qt::AlignVCenter, elided);
     };
 
-    // Right-side horizontal metrics
+    // Priority order places core baseline/extents first, then secondary metrics.
+    drawMetricLabel(text_y, "baseline", pal.mid().color(), false);
     drawMetricLabel(ascent_y, "ascent", QColor(100, 150, 255), true);
+    drawMetricLabel(descent_y, "descent", QColor(255, 150, 100), false);
     if (display_fm.capHeight() > 0 && qAbs(cap_y - ascent_y) > 0.1) {
         drawMetricLabel(cap_y, "cap height", QColor(255, 100, 200), true);
     }
     if (display_fm.xHeight() > 0) {
         drawMetricLabel(x_y, "x-height", QColor(100, 200, 150), true);
     }
-    drawMetricLabel(text_y, "baseline", pal.mid().color(), false);
-    drawMetricLabel(descent_y, "descent", QColor(255, 150, 100), false);
+    if (draw_strikeout) {
+        drawMetricLabel(strike_top_y,
+                        QString("strikeout (%1/%2)")
+                            .arg(m_deco_metrics.strikeout_pos)
+                            .arg(m_deco_metrics.strikeout_size),
+                        QColor(255, 120, 80), true);
+    }
+    if (draw_underline) {
+        drawMetricLabel(underline_top_y,
+                        QString("underline (%1/%2)")
+                            .arg(m_deco_metrics.underline_pos)
+                            .arg(m_deco_metrics.underline_thick),
+                        QColor(70, 160, 255), false);
+    }
 
     // Vertical metrics (Origin, Advance, LSB, RSB)
     auto drawVerticalLabel = [&](qreal x, const QString &text, QColor color,
                                  bool isBottom, bool isLeftOfLine) {
-        painter.setPen(color);
-        qreal text_w  = painter.fontMetrics().horizontalAdvance(text);
-        qreal w       = text_w + 4.0;
-        qreal h       = 20.0;
-        qreal label_x = isLeftOfLine ? x - w - 2.0 : x + 2.0;
+        const qreal h = qCeil(label_fm.height()) + 2.0;
+        if (safe_bounds.width() <= 4.0 || safe_bounds.height() < h) {
+            return;
+        }
+        const QString elided = label_fm.elidedText(
+            text, Qt::ElideRight, qMax(1.0, safe_bounds.width() - 4.0));
+        const qreal text_w = label_fm.horizontalAdvance(elided);
+        const qreal w      = qMin(safe_bounds.width(), text_w + 4.0);
+        qreal label_x      = isLeftOfLine ? x - w - 2.0 : x + 2.0;
 
         // Boundary check: if outside is clipped by widget, move to inside
-        if (label_x < 5.0)
+        if (label_x < safe_bounds.left()) {
             label_x = x + 2.0;
-        if (label_x + w > rect.width() - 5.0)
+        }
+        if (label_x + w > safe_bounds.right()) {
             label_x = x - w - 2.0;
+        }
+        label_x = qBound(safe_bounds.left(), label_x, safe_bounds.right() - w);
 
-        // Final safety clamp
-        label_x = qBound(2.0, label_x, rect.width() - w - 2.0);
+        const qreal label_y
+            = isBottom ? (safe_bounds.bottom() - h) : safe_bounds.top();
+        const QRectF r = placeNonOverlappingLabel(
+            QRectF(label_x, label_y, w, h), safe_bounds,
+            isBottom ? -(h + 2.0) : (h + 2.0), occupied_labels);
 
-        qreal label_y = isBottom ? rect.height() - h - 5.0 : 5.0;
-        QRectF r(label_x, label_y, w, h);
+        occupied_labels.append(r);
+        m_last_label_rects.append(r);
+        painter.setPen(color);
         painter.drawText(
             r,
             (label_x < x ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter,
-            text);
+            elided);
     };
 
     drawVerticalLabel(text_x, "origin", QColor(200, 100, 255), true, true);
@@ -277,6 +473,8 @@ GlyphInspectorWidget::GlyphInspectorWidget(QWidget *parent) : QWidget(parent)
 
 void GlyphInspectorWidget::createUI()
 {
+    setMinimumWidth(320);
+
     auto main_layout = new QVBoxLayout(this);
     main_layout->setContentsMargins(10, 10, 10, 10);
     main_layout->setSpacing(10);
@@ -293,51 +491,68 @@ void GlyphInspectorWidget::createUI()
     QPalette pal = m_label_no_selection->palette();
     pal.setColor(QPalette::WindowText, pal.color(QPalette::Mid));
     m_label_no_selection->setPalette(pal);
-    main_layout->addWidget(m_label_no_selection, 1);  // stretch to fill space
+    main_layout->addWidget(m_label_no_selection, 1);
 
     // Unicode Information group
-    m_group_unicode         = new QGroupBox("Unicode Information", this);
-    auto unicode_layout     = new QFormLayout(m_group_unicode);
+    m_group_unicode = new QGroupBox("Unicode Information", this);
+    auto unicode_layout = new QFormLayout(m_group_unicode);
+    unicode_layout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
     m_label_unicode_value   = new QLabel(this);
     m_label_unicode_decimal = new QLabel(this);
     m_label_unicode_block   = new QLabel(this);
+    configureValueLabel(m_label_unicode_value);
+    configureValueLabel(m_label_unicode_decimal);
+    configureValueLabel(m_label_unicode_block);
     unicode_layout->addRow("Code Point:", m_label_unicode_value);
     unicode_layout->addRow("Decimal:", m_label_unicode_decimal);
     unicode_layout->addRow("Block:", m_label_unicode_block);
     main_layout->addWidget(m_group_unicode);
 
     // Glyph Metrics group
-    m_group_glyph         = new QGroupBox("Glyph Metrics", this);
-    auto glyph_layout     = new QFormLayout(m_group_glyph);
+    m_group_glyph = new QGroupBox("Glyph Metrics", this);
+    auto glyph_layout = new QFormLayout(m_group_glyph);
+    glyph_layout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
     m_label_advance_width = new QLabel(this);
     m_label_bbox          = new QLabel(this);
     m_label_bearings      = new QLabel(this);
+    configureValueLabel(m_label_advance_width);
+    configureValueLabel(m_label_bbox);
+    configureValueLabel(m_label_bearings);
     glyph_layout->addRow("Advance Width:", m_label_advance_width);
     glyph_layout->addRow("Bounding Box:", m_label_bbox);
     glyph_layout->addRow("Bearings:", m_label_bearings);
     main_layout->addWidget(m_group_glyph);
 
     // Font Metrics group
-    m_group_font         = new QGroupBox("Font Metrics", this);
-    auto font_layout     = new QFormLayout(m_group_font);
+    m_group_font = new QGroupBox("Font Metrics", this);
+    auto font_layout = new QFormLayout(m_group_font);
+    font_layout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
     m_label_ascent       = new QLabel(this);
     m_label_descent      = new QLabel(this);
     m_label_line_gap     = new QLabel(this);
     m_label_units_per_em = new QLabel(this);
+    m_label_underline    = new QLabel(this);
+    m_label_strikeout    = new QLabel(this);
+    configureValueLabel(m_label_ascent);
+    configureValueLabel(m_label_descent);
+    configureValueLabel(m_label_line_gap);
+    configureValueLabel(m_label_units_per_em);
+    configureValueLabel(m_label_underline);
+    configureValueLabel(m_label_strikeout);
     font_layout->addRow("Ascent:", m_label_ascent);
     font_layout->addRow("Descent:", m_label_descent);
     font_layout->addRow("Line Gap:", m_label_line_gap);
     font_layout->addRow("Units per Em:", m_label_units_per_em);
+    font_layout->addRow("Underline:", m_label_underline);
+    font_layout->addRow("Strikeout:", m_label_strikeout);
     main_layout->addWidget(m_group_font);
 
     // Visual Preview group
     m_group_preview     = new QGroupBox("Visual Preview", this);
     auto preview_layout = new QVBoxLayout(m_group_preview);
     m_preview_widget    = new GlyphPreviewWidget(this);
-    preview_layout->addWidget(m_preview_widget,
-                              1);  // stretch factor 1 to fill space
-    main_layout->addWidget(m_group_preview,
-                           1);  // stretch factor 1 to take remaining space
+    preview_layout->addWidget(m_preview_widget, 1);
+    main_layout->addWidget(m_group_preview, 1);
 
     // Initially hide all groups
     m_group_unicode->hide();
@@ -348,11 +563,13 @@ void GlyphInspectorWidget::createUI()
 
 void GlyphInspectorWidget::updateGlyph(QChar ch,
                                        const QFont &font,
-                                       const QString &font_path)
+                                       const QString &font_path,
+                                       const FontDecorationMetrics &deco)
 {
     m_char          = ch;
     m_font          = font;
     m_font_path     = font_path;
+    m_deco_metrics  = deco;
     m_has_selection = !ch.isNull();
 
     if (m_has_selection) {
@@ -365,7 +582,7 @@ void GlyphInspectorWidget::updateGlyph(QChar ch,
         updateMetrics();
         updateLabels();
         m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box,
-                                       m_metrics.advance_width);
+                                       m_metrics.advance_width, m_deco_metrics);
     }
     else {
         clearSelection();
@@ -391,14 +608,16 @@ QPixmap GlyphInspectorWidget::getPreviewPixmap() const
     return m_preview_widget->grab();
 }
 
-void GlyphInspectorWidget::updateFont(const QFont &font)
+void GlyphInspectorWidget::updateFont(const QFont &font,
+                                      const FontDecorationMetrics &deco)
 {
+    m_deco_metrics = deco;
     if (m_has_selection) {
         m_font = font;
         updateMetrics();
         updateLabels();
         m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box,
-                                       m_metrics.advance_width);
+                                       m_metrics.advance_width, m_deco_metrics);
     }
 }
 
@@ -416,7 +635,6 @@ void GlyphInspectorWidget::updateMetrics()
     QRawFont raw_font = QRawFont::fromFont(m_font);
     if (!raw_font.isValid()) {
         qprintt << "QRawFont invalid, falling back to QFontMetrics";
-        // Fallback to QFontMetrics
         QFontMetricsF fm(m_font);
         m_metrics.advance_width = fm.horizontalAdvance(m_char);
         m_metrics.bounding_box  = fm.boundingRect(m_char);
@@ -446,7 +664,6 @@ void GlyphInspectorWidget::updateMetrics()
     m_metrics.line_gap      = raw_font.leading();
     m_metrics.units_per_em  = raw_font.unitsPerEm();
 
-    // Calculate bearings
     m_metrics.left_bearing = m_metrics.bounding_box.left();
     m_metrics.right_bearing
         = m_metrics.advance_width - m_metrics.bounding_box.right();
@@ -459,7 +676,9 @@ void GlyphInspectorWidget::updateLabels()
     m_label_unicode_value->setText(
         QString("U+%1").arg(code_point, 4, 16, QChar('0')).toUpper());
     m_label_unicode_decimal->setText(QString::number(code_point));
-    m_label_unicode_block->setText(getUnicodeBlockName(code_point));
+    const QString block_name = getUnicodeBlockName(code_point);
+    m_label_unicode_block->setText(block_name);
+    m_label_unicode_block->setToolTip(block_name);
 
     // Glyph metrics
     m_label_advance_width->setText(
@@ -477,9 +696,22 @@ void GlyphInspectorWidget::updateLabels()
     m_label_ascent->setText(QString("%1").arg(m_metrics.ascent, 0, 'f', 2));
     m_label_descent->setText(QString("%1").arg(m_metrics.descent, 0, 'f', 2));
     m_label_line_gap->setText(QString("%1").arg(m_metrics.line_gap, 0, 'f', 2));
-    m_label_units_per_em->setText(m_metrics.units_per_em > 0
-                                      ? QString::number(m_metrics.units_per_em)
-                                      : "N/A");
+    const int upem = m_deco_metrics.units_per_em > 0
+                         ? m_deco_metrics.units_per_em
+                         : m_metrics.units_per_em;
+    m_label_units_per_em->setText(upem > 0 ? QString::number(upem) : "N/A");
+    m_label_underline->setText(
+        m_deco_metrics.has_underline
+            ? QString("pos %1 / thick %2 (FUnits)")
+                  .arg(m_deco_metrics.underline_pos)
+                  .arg(m_deco_metrics.underline_thick)
+            : QStringLiteral("N/A"));
+    m_label_strikeout->setText(
+        m_deco_metrics.has_strikeout
+            ? QString("pos %1 / size %2 (FUnits)")
+                  .arg(m_deco_metrics.strikeout_pos)
+                  .arg(m_deco_metrics.strikeout_size)
+            : QStringLiteral("N/A"));
 }
 
 QString GlyphInspectorWidget::getUnicodeBlockName(ushort code_point)

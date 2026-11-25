@@ -1,9 +1,13 @@
 #pragma once
 
+#include <QByteArray>
 #include <QFont>
+#include <QHash>
 #include <QPixmap>
 #include <QVector>
 #include <QWidget>
+
+#include "fontinspectorengine.h"
 
 class CharacterWidget;
 class FontPreviewEdit;
@@ -12,11 +16,14 @@ class WaterfallWidget;
 class QCheckBox;
 class QComboBox;
 class QFrame;
+class QGridLayout;
 class QLabel;
 class QPushButton;
 class QScrollArea;
 class QSlider;
 class QStackedWidget;
+class QTimer;
+class QVBoxLayout;
 
 namespace Ui {
 class FontWidget;
@@ -77,6 +84,21 @@ public:
         return m_invert_preview;
     }
 
+    QVector<FontNameRecord> readNameRecords();
+    const FontInspectorEngine &inspectorEngine() const
+    {
+        return m_inspector;
+    }
+    int currentFaceIndex() const
+    {
+        return m_face_index;
+    }
+    QHash<QByteArray, float> variableAxisValues() const
+    {
+        return m_axis_values;
+    }
+    void setVariableAxisValue(const QByteArray &tag, float value);
+
     Q_SIGNAL void sigToast(const QString &msg);
     Q_SIGNAL void sigCollapsedChanged(bool c);
     Q_SIGNAL void sigFontSizeChanged(int pt);
@@ -87,10 +109,17 @@ protected:
 
 private:
     void initUI(const QStringList &names);
+    void initAxesBar();
     void initTextTab();
     void initSampleTab();
     void initCharTab();
     void initGlyphTab();
+    void rebuildAxesBar(bool reset_to_defaults);
+    void syncAxesForStyle(const QString &style);
+    void probeVariableAxisBackend();
+    void refreshActiveTabFromAxes();
+    void refreshTextWidgetsFromFont();
+    void refreshGlyphInspectorFromFont();
     void updateTabTextPreview();
     void updateSamplePreview();
     void updateInfo();
@@ -117,7 +146,36 @@ private:
     QPixmap renderEditPixmap();
     QPixmap renderSamplePixmap();
 
+    struct AxisControl {
+        QByteArray tag;
+        float min_val     = 0.0f;
+        float default_val = 0.0f;
+        float max_val     = 0.0f;
+        int steps         = 1;
+        QSlider *slider   = nullptr;
+        QLabel *value     = nullptr;
+        QPushButton *reset = nullptr;
+    };
+
+    FontInspectorEngine m_inspector;
+    int m_face_index = 0;
+    QHash<QByteArray, float> m_axis_values;
+    QVector<AxisControl> m_axis_controls;
+    QWidget *m_axes_bar          = nullptr;
+    QVBoxLayout *m_axes_root     = nullptr;
+    QLabel *m_axes_warning       = nullptr;
+    QWidget *m_axes_rows_host    = nullptr;
+    QGridLayout *m_axes_grid     = nullptr;
+    QTimer *m_axis_timer         = nullptr;
+    bool m_gdi_probed            = false;
+    bool m_gdi_inactive          = false;
+    bool m_text_dirty            = false;
+    bool m_sample_dirty          = false;
+    bool m_char_dirty            = false;
+    bool m_gi_dirty              = false;
+
     CharacterWidget *m_wnd_char    = nullptr;
+    QWidget *m_tab_char            = nullptr;
     GlyphInspectorWidget *m_wnd_gi = nullptr;
     QWidget *m_tab_gi              = nullptr;
 
