@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QPointF>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -45,6 +46,21 @@ struct FontFeatureInfo {
     bool default_on = false;
 };
 
+struct GlyphOutlineData {
+    enum PointKind : quint8 {
+        OffConic = 0,
+        OnCurve  = 1,
+        OffCubic = 2,
+    };
+
+    bool valid        = false;
+    int contour_count = 0;
+    int point_count   = 0;
+    QVector<QPointF> points;    // FUnits, y-up
+    QVector<quint8> tags;       // PointKind
+    QVector<int> contour_ends;  // inclusive end index per contour
+};
+
 struct FontInspectionData {
     QVector<FontNameRecord> name_records;
     FontDecorationMetrics decoration_metrics;
@@ -84,6 +100,10 @@ public:
         int face_index, const QString &style) const;
     FontDecorationMetrics decorationMetrics(
         int face_index, const QHash<QByteArray, float> &axis_coords = {});
+    GlyphOutlineData glyphOutline(
+        int face_index,
+        QChar ch,
+        const QHash<QByteArray, float> &axis_coords = {});
 
     static QVector<FontNameRecord> readNameRecords(const QString &font_path);
     static QString normalizeStyleName(const QString &name);
@@ -105,6 +125,8 @@ private:
     };
 
     bool ensureLibrary();
+    void applyAxisCoords(FaceEntry &entry,
+                         const QHash<QByteArray, float> &axis_coords);
     void populateFace(FaceEntry &entry);
 
     FT_LibraryRec_ *m_library = nullptr;

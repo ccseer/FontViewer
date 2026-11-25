@@ -22,6 +22,7 @@ constexpr auto g_ini_line_height    = "line_height";
 constexpr auto g_ini_letter_spacing = "letter_spacing";
 constexpr auto g_ini_waterfall      = "waterfall_enabled";
 constexpr auto g_ini_invert         = "invert_preview";
+constexpr auto g_ini_show_outline   = "show_outline_points";
 
 constexpr int g_def_pt                = 16;
 constexpr double g_def_line_height    = 1.4;
@@ -45,6 +46,7 @@ FontViewer::~FontViewer()
         m_ini->setValue(g_ini_letter_spacing, m_view->getLetterSpacing());
         m_ini->setValue(g_ini_waterfall, m_view->isWaterfallEnabled());
         m_ini->setValue(g_ini_invert, m_view->isInvertPreview());
+        m_ini->setValue(g_ini_show_outline, m_view->isShowOutlinePoints());
     }
 }
 
@@ -135,6 +137,8 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
     m_view->setWaterfallEnabled(
         m_ini->value(g_ini_waterfall, false).toBool());
     m_view->setInvertPreview(m_ini->value(g_ini_invert, false).toBool());
+    m_view->setShowOutlinePoints(
+        m_ini->value(g_ini_show_outline, false).toBool());
 
     updateTheme(options()->theme());
     updateDPR(options()->dpr());

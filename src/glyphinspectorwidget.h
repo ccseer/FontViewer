@@ -7,6 +7,7 @@
 
 #include "fontinspectorengine.h"
 
+class QCheckBox;
 class QLabel;
 class QVBoxLayout;
 class QGroupBox;
@@ -23,7 +24,8 @@ public:
     void updateGlyph(QChar ch,
                      const QFont &font,
                      const QString &font_path,
-                     const FontDecorationMetrics &deco = {});
+                     const FontDecorationMetrics &deco = {},
+                     const GlyphOutlineData &outline   = {});
     void clearSelection();
     QPixmap getPreviewPixmap() const;
     bool hasSelection() const
@@ -34,14 +36,34 @@ public:
     {
         return m_char;
     }
+    const QFont &currentFont() const
+    {
+        return m_font;
+    }
     const FontDecorationMetrics &decorationMetrics() const
     {
         return m_deco_metrics;
     }
+    const GlyphOutlineData &outlineData() const
+    {
+        return m_outline;
+    }
+    void setShowOutlinePoints(bool on);
+    bool isShowOutlinePoints() const
+    {
+        return m_show_outline_points;
+    }
+    GlyphPreviewWidget *previewWidget() const
+    {
+        return m_preview_widget;
+    }
+
+    Q_SIGNAL void sigShowOutlinePointsChanged(bool on);
 
 public slots:
     void updateFont(const QFont &font,
-                    const FontDecorationMetrics &deco = {});
+                    const FontDecorationMetrics &deco = {},
+                    const GlyphOutlineData &outline   = {});
     void updateTheme(int theme);
 
 private:
@@ -55,7 +77,9 @@ private:
     QFont m_font;
     QString m_font_path;
     FontDecorationMetrics m_deco_metrics;
-    bool m_has_selection = false;
+    GlyphOutlineData m_outline;
+    bool m_has_selection       = false;
+    bool m_show_outline_points = false;
 
     // Metrics cache
     struct GlyphMetrics {
@@ -76,12 +100,15 @@ private:
     QLabel *m_label_advance_width;
     QLabel *m_label_bbox;
     QLabel *m_label_bearings;
+    QLabel *m_label_contours;
+    QLabel *m_label_points;
     QLabel *m_label_ascent;
     QLabel *m_label_descent;
     QLabel *m_label_line_gap;
     QLabel *m_label_units_per_em;
     QLabel *m_label_underline;
     QLabel *m_label_strikeout;
+    QCheckBox *m_chk_outline;
     GlyphPreviewWidget *m_preview_widget;
     QLabel *m_label_no_selection;
     QGroupBox *m_group_unicode;
@@ -103,7 +130,13 @@ public:
                       const QFont &font,
                       const QRectF &bbox,
                       qreal advance_width,
-                      const FontDecorationMetrics &deco = {});
+                      const FontDecorationMetrics &deco = {},
+                      const GlyphOutlineData &outline   = {});
+    void setShowOutlinePoints(bool on);
+    bool isShowOutlinePoints() const
+    {
+        return m_show_outline_points;
+    }
     void clear();
 
     QVector<QRectF> lastLabelRects() const
@@ -118,6 +151,10 @@ public:
     {
         return m_last_strikeout_band;
     }
+    QVector<QPointF> lastOutlineScreenPoints() const
+    {
+        return m_last_outline_points;
+    }
 
     QSize sizeHint() const override;
 
@@ -129,9 +166,12 @@ private:
     QFont m_font;
     QRectF m_bbox;
     FontDecorationMetrics m_deco_metrics;
-    qreal m_advance_width = 0;
-    bool m_has_data       = false;
+    GlyphOutlineData m_outline;
+    qreal m_advance_width       = 0;
+    bool m_has_data             = false;
+    bool m_show_outline_points  = false;
     mutable QVector<QRectF> m_last_label_rects;
     mutable QRectF m_last_underline_band;
     mutable QRectF m_last_strikeout_band;
+    mutable QVector<QPointF> m_last_outline_points;
 };

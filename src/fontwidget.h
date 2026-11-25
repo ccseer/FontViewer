@@ -83,6 +83,11 @@ public:
     {
         return m_invert_preview;
     }
+    void setShowOutlinePoints(bool on);
+    bool isShowOutlinePoints() const;
+    void setFeatureEnabled(const QByteArray &tag, bool enabled);
+    bool isFeatureEnabled(const QByteArray &tag) const;
+    QVector<QPushButton *> featurePillButtons() const;
 
     QVector<FontNameRecord> readNameRecords();
     const FontInspectorEngine &inspectorEngine() const
@@ -110,16 +115,22 @@ protected:
 private:
     void initUI(const QStringList &names);
     void initAxesBar();
+    void initFeaturesBar();
     void initTextTab();
     void initSampleTab();
     void initCharTab();
     void initGlyphTab();
     void rebuildAxesBar(bool reset_to_defaults);
+    void rebuildFeaturesBar();
+    void updateFeaturePillsState();
+    void applyFeaturesNotePalette();
     void syncAxesForStyle(const QString &style);
     void probeVariableAxisBackend();
     void refreshActiveTabFromAxes();
+    void refreshActiveTabFromFeatures();
     void refreshTextWidgetsFromFont();
     void refreshGlyphInspectorFromFont();
+    void updateGlyphInspectorFont(const QFont &glyph_font);
     void updateTabTextPreview();
     void updateSamplePreview();
     void updateInfo();
@@ -167,6 +178,22 @@ private:
     QWidget *m_axes_rows_host    = nullptr;
     QGridLayout *m_axes_grid     = nullptr;
     QTimer *m_axis_timer         = nullptr;
+
+    struct FeaturePillControl {
+        QByteArray tag;
+        bool default_on    = false;
+        bool is_ligature   = false;
+        QString tooltip;
+        QPushButton *button = nullptr;
+    };
+    QHash<QByteArray, bool> m_feature_overrides;
+    QVector<FeaturePillControl> m_feature_controls;
+    QWidget *m_features_bar        = nullptr;
+    QVBoxLayout *m_features_root   = nullptr;
+    QLabel *m_features_note        = nullptr;
+    QPushButton *m_features_reset  = nullptr;
+    QWidget *m_features_pills_host = nullptr;
+
     bool m_gdi_probed            = false;
     bool m_gdi_inactive          = false;
     bool m_text_dirty            = false;

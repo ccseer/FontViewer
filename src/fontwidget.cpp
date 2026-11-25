@@ -14,6 +14,7 @@
 #include <QHBoxLayout>
 #include <QImage>
 #include <QLabel>
+#include <QLayout>
 #include <QListView>
 #include <QPainter>
 #include <QPushButton>
@@ -171,6 +172,222 @@ QString formatAxisValue(float val, float min_val, float max_val)
     }
     return QString::number(val, 'f', 1);
 }
+
+bool isLigatureFeatureTag(const QByteArray &tag)
+{
+    return tag == QByteArrayLiteral("liga")
+           || tag == QByteArrayLiteral("clig")
+           || tag == QByteArrayLiteral("dlig")
+           || tag == QByteArrayLiteral("hlig");
+}
+
+QString formatFeaturePillText(const FontFeatureInfo &info, const QFontMetrics &fm)
+{
+    const QString tag_str = QString::fromLatin1(info.tag);
+    if (info.friendly_name.isEmpty() || info.friendly_name == tag_str) {
+        return tag_str;
+    }
+    const QString label = fm.elidedText(info.friendly_name, Qt::ElideRight, 130);
+    return QStringLiteral("%1 · %2").arg(tag_str, label);
+}
+
+class FlowLayout : public QLayout {
+public:
+    explicit FlowLayout(QWidget *parent = nullptr, int h_spacing = 6,
+                        int v_spacing = 4)
+        : QLayout(parent), m_h_spacing(h_spacing), m_v_spacing(v_spacing)
+    {
+        setContentsMargins(0, 0, 0, 0);
+    }
+
+    ~FlowLayout() override
+    {
+        QLayoutItem *item = nullptr;
+        while ((item = takeAt(0)) != nullptr) {
+            delete item;
+        }
+    }
+
+    void addItem(QLayoutItem *item) override
+    {
+        m_items.append(item);
+    }
+
+    int count() const override
+    {
+        return m_items.size();
+    }
+
+    QLayoutItem *itemAt(int index) const override
+    {
+        return m_items.value(index);
+    }
+
+    QLayoutItem *takeAt(int index) override
+    {
+        if (index >= 0 && index < m_items.size()) {
+            return m_items.takeAt(index);
+        }
+        return nullptr;
+    }
+
+    Qt::Orientations expandingDirections() const override
+    {
+        return {};
+    }
+
+    bool hasHeightForWidth() const override
+    {
+        return true;
+    }
+
+    int heightForWidth(int width) const override
+    {
+        return doLayout(QRect(0, 0, width, 0), true);
+    }
+
+    void setGeometry(const QRect &rect) override
+    {
+        QLayout::setGeometry(rect);
+        doLayout(rect, false);
+    }
+
+    QSize sizeHint() const override
+    {
+        return minimumSize();
+    }
+
+    QSize minimumSize() const override
+    {
+        QSize size;
+        for (const QLayoutItem *item : m_items) {
+            if (!item->isEmpty()) {
+                size = size.expandedTo(item->minimumSize());
+            }
+        }
+        const QMargins m = contentsMargins();
+        size += QSize(m.left() + m.right(), m.top() + m.bottom());
+        return size;
+    }
+
+private:
+    int doLayout(const QRect &rect, bool test_only) const
+    {
+        int left   = 0;
+        int top    = 0;
+        int right  = 0;
+        int bottom = 0;
+        getContentsMargins(&left, &top, &right, &bottom);
+        const QRect effective = rect.adjusted(left, top, -right, -bottom);
+        int x                 = effective.x();
+        int y                 = effective.y();
+        int line_height       = 0;
+
+        for (QLayoutItem *item : m_items) {
+            if (item->isEmpty()) {
+                continue;
+            }
+            const QSize item_sz = item->sizeHint();
+            int next_x          = x + item_sz.width() + m_h_spacing;
+            if (next_x - m_h_spacing - 1 > effective.right()
+                && line_height > 0) {
+                x           = effective.x();
+                y           = y + line_height + m_v_spacing;
+                next_x      = x + item_sz.width() + m_h_spacing;
+                line_height = 0;
+            }
+            if (!test_only) {
+                item->setGeometry(QRect(QPoint(x, y), item_sz));
+            }
+            x           = next_x;
+            line_height = qMax(line_height, item_sz.height());
+        }
+        return y + line_height - rect.y() + bottom;
+    }
+
+    QVector<QLayoutItem *> m_items;
+    int m_h_spacing = 6;
+    int m_v_spacing = 4;
+};
+
+class FeaturePillButton : public QPushButton {
+public:
+    explicit FeaturePillButton(const FontFeatureInfo &info,
+                               QWidget *parent = nullptr)
+        : QPushButton(parent)
+    {
+        setCheckable(true);
+        setChecked(info.default_on);
+        setFocusPolicy(Qt::NoFocus);
+        setCursor(Qt::PointingHandCursor);
+        QFont f = font();
+        f.setPointSizeF(qMax(8.0, f.pointSizeF() - 1.0));
+        setFont(f);
+        setText(formatFeaturePillText(info, fontMetrics()));
+        setShortcut(QKeySequence());
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    }
+
+    QSize sizeHint() const override
+    {
+        const QFontMetrics fm = fontMetrics();
+        return QSize(fm.horizontalAdvance(text()) + 16, fm.height() + 8);
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        return sizeHint();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QPalette &pal = palette();
+        const QRectF r      = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const qreal radius  = r.height() / 2.0;
+        const bool enabled  = isEnabled();
+        const bool checked  = isChecked();
+
+        if (!enabled) {
+            painter.setOpacity(0.45);
+        }
+
+        QColor bg     = pal.color(QPalette::Button);
+        QColor border = pal.color(QPalette::Mid);
+        QColor fg     = pal.color(QPalette::ButtonText);
+
+        if (checked) {
+            const QColor accent = pal.color(QPalette::Highlight);
+            bg                  = accent;
+            bg.setAlpha(46);
+            border = accent;
+            fg     = pal.color(QPalette::WindowText);
+        }
+        else {
+            bg.setAlpha(130);
+            border.setAlpha(140);
+        }
+
+        if (enabled && underMouse()) {
+            border = checked ? pal.color(QPalette::Highlight)
+                             : pal.color(QPalette::WindowText);
+            if (!checked) {
+                bg.setAlpha(190);
+            }
+        }
+
+        painter.setPen(QPen(border, 1.0));
+        painter.setBrush(bg);
+        painter.drawRoundedRect(r, radius, radius);
+
+        painter.setPen(fg);
+        painter.setFont(font());
+        painter.drawText(r, Qt::AlignCenter, text());
+    }
+};
 
 // Keeps the Text tab toolbar on a single row and moves line height and letter
 // spacing into a non-modal Aa panel when the available width would clip them.
@@ -443,9 +660,10 @@ void FontWidget::initUI(const QStringList &names_raw)
     connect(ui->tabWidget, &QTabWidget::currentChanged, this,
             &FontWidget::onTabChanged);
 
-    // Move tabWidget below the variable-axes bar row.
-    ui->gridLayout->addWidget(ui->tabWidget, 2, 0);
+    // Move tabWidget below variable-axes and OpenType feature bars.
+    ui->gridLayout->addWidget(ui->tabWidget, 3, 0);
     initAxesBar();
+    initFeaturesBar();
 
     initTextTab();
     initSampleTab();
@@ -699,9 +917,12 @@ void FontWidget::initGlyphTab()
                 const int pt = getCurrentFontSize();
                 const FontDecorationMetrics deco
                     = m_inspector.decorationMetrics(m_face_index, m_axis_values);
+                const GlyphOutlineData outline = ch.isNull()
+                    ? GlyphOutlineData{}
+                    : m_inspector.glyphOutline(m_face_index, ch, m_axis_values);
                 m_wnd_gi->updateGlyph(ch,
                                       buildPreviewFont(pt, PreviewFontRole::Glyph),
-                                      m_font_path, deco);
+                                      m_font_path, deco, outline);
                 m_gi_dirty = false;
 
                 // Update tab title with character code
@@ -764,6 +985,175 @@ void FontWidget::initAxesBar()
 
     m_axes_bar->hide();
     ui->gridLayout->addWidget(m_axes_bar, 1, 0);
+}
+
+void FontWidget::initFeaturesBar()
+{
+    m_features_bar = new QWidget(this);
+    m_features_bar->setFocusPolicy(Qt::NoFocus);
+    m_features_root = new QVBoxLayout(m_features_bar);
+    m_features_root->setContentsMargins(0, 2, 0, 4);
+    m_features_root->setSpacing(4);
+
+    auto header = new QHBoxLayout();
+    header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(8);
+
+    auto title = new QLabel(tr("OpenType Features:"), m_features_bar);
+    title->setFocusPolicy(Qt::NoFocus);
+    header->addWidget(title);
+
+    m_features_note = new QLabel(tr("Text preview only"), m_features_bar);
+    m_features_note->setFocusPolicy(Qt::NoFocus);
+    applyFeaturesNotePalette();
+    header->addWidget(m_features_note, 1);
+
+    m_features_reset = new QPushButton(tr("Reset Features"), m_features_bar);
+    m_features_reset->setFocusPolicy(Qt::NoFocus);
+    m_features_reset->setFlat(true);
+    m_features_reset->setCursor(Qt::PointingHandCursor);
+    m_features_reset->hide();
+    connect(m_features_reset, &QPushButton::clicked, this, [this]() {
+        if (!m_feature_overrides.isEmpty()) {
+            m_feature_overrides.clear();
+            for (const FeaturePillControl &ctrl : m_feature_controls) {
+                if (ctrl.button) {
+                    QSignalBlocker blocker(ctrl.button);
+                    ctrl.button->setChecked(ctrl.default_on);
+                }
+            }
+            updateFeaturePillsState();
+            refreshActiveTabFromFeatures();
+        }
+        clearViewerFocus();
+    });
+    header->addWidget(m_features_reset);
+    m_features_root->addLayout(header);
+
+    m_features_pills_host = new QWidget(m_features_bar);
+    m_features_pills_host->setFocusPolicy(Qt::NoFocus);
+    m_features_pills_host->setSizePolicy(QSizePolicy::Expanding,
+                                         QSizePolicy::Preferred);
+    new FlowLayout(m_features_pills_host, 6, 4);
+    m_features_root->addWidget(m_features_pills_host);
+
+    m_features_bar->hide();
+    ui->gridLayout->addWidget(m_features_bar, 2, 0);
+}
+
+void FontWidget::applyFeaturesNotePalette()
+{
+    if (!m_features_note) {
+        return;
+    }
+    QPalette note_pal = palette();
+    note_pal.setColor(QPalette::WindowText, note_pal.color(QPalette::Mid));
+    m_features_note->setPalette(note_pal);
+}
+
+void FontWidget::rebuildFeaturesBar()
+{
+    if (!m_features_bar || !m_features_pills_host) {
+        return;
+    }
+
+    m_feature_overrides.clear();
+    for (const FeaturePillControl &ctrl : m_feature_controls) {
+        if (ctrl.button) {
+            ctrl.button->hide();
+            ctrl.button->deleteLater();
+        }
+    }
+    m_feature_controls.clear();
+
+    if (auto *flow = m_features_pills_host->layout()) {
+        while (QLayoutItem *item = flow->takeAt(0)) {
+            delete item;
+        }
+    }
+
+    // Technical validation gate (Qt 6.8.3 headers): Qt provides no per-font
+    // OpenType `locl` language override on Windows DirectWrite, so keep the
+    // bar free of non-functional language selectors while honoring GSUB/GPOS
+    // features via QFont::setFeature().
+    const QVector<FontFeatureInfo> features
+        = m_inspector.isValid()
+              ? m_inspector.inspectFace(m_face_index).ot_features
+              : QVector<FontFeatureInfo>{};
+
+    if (features.isEmpty()) {
+        updateFeaturePillsState();
+        m_features_bar->hide();
+        return;
+    }
+
+    auto *flow = m_features_pills_host->layout();
+    for (const FontFeatureInfo &info : features) {
+        auto *btn = new FeaturePillButton(info, m_features_pills_host);
+        const QString tag_str = QString::fromLatin1(info.tag);
+        const QString tip
+            = QStringLiteral("%1 — %2 (%3)")
+                  .arg(tag_str,
+                       info.friendly_name.isEmpty() ? tag_str
+                                                    : info.friendly_name,
+                       info.default_on ? tr("default on") : tr("default off"));
+        btn->setToolTip(tip);
+
+        const QByteArray tag = info.tag;
+        const bool def_on    = info.default_on;
+        connect(btn, &QPushButton::toggled, this, [this, tag, def_on](bool on) {
+            if (on == def_on) {
+                m_feature_overrides.remove(tag);
+            }
+            else {
+                m_feature_overrides.insert(tag, on);
+            }
+            updateFeaturePillsState();
+            refreshActiveTabFromFeatures();
+            clearViewerFocus();
+        });
+
+        flow->addWidget(btn);
+        m_feature_controls.append(
+            {tag, def_on, isLigatureFeatureTag(tag), tip, btn});
+    }
+
+    updateFeaturePillsState();
+    m_features_bar->show();
+    m_features_pills_host->updateGeometry();
+}
+
+void FontWidget::updateFeaturePillsState()
+{
+    const bool has_spacing = !qFuzzyIsNull(m_letter_spacing);
+    bool has_ligature      = false;
+    for (const FeaturePillControl &ctrl : m_feature_controls) {
+        if (!ctrl.button) {
+            continue;
+        }
+        const bool disabled_by_spacing = has_spacing && ctrl.is_ligature;
+        ctrl.button->setEnabled(!disabled_by_spacing);
+        if (ctrl.is_ligature) {
+            has_ligature = true;
+            ctrl.button->setToolTip(
+                disabled_by_spacing
+                    ? ctrl.tooltip + QLatin1Char('\n')
+                          + tr("Disabled by Qt while letter spacing is non-zero")
+                    : ctrl.tooltip);
+        }
+    }
+    if (m_features_note) {
+        if (has_spacing && has_ligature) {
+            m_features_note->setText(
+                tr("Text preview only · Ligatures disabled while letter spacing ≠ 0"));
+        }
+        else {
+            m_features_note->setText(tr("Text preview only"));
+        }
+    }
+    if (m_features_reset) {
+        m_features_reset->setVisible(!m_feature_overrides.isEmpty());
+    }
 }
 
 void FontWidget::rebuildAxesBar(bool reset_to_defaults)
@@ -1149,8 +1539,24 @@ QFont FontWidget::buildPreviewFont(int pt_size, PreviewFontRole role) const
         }
     }
 
-    if (role == PreviewFontRole::Text && !qFuzzyIsNull(m_letter_spacing)) {
-        ft.setLetterSpacing(QFont::AbsoluteSpacing, m_letter_spacing);
+    if (role == PreviewFontRole::Text) {
+        const bool has_spacing = !qFuzzyIsNull(m_letter_spacing);
+        for (auto it = m_feature_overrides.cbegin();
+             it != m_feature_overrides.cend(); ++it) {
+            if (has_spacing && isLigatureFeatureTag(it.key())) {
+                continue;
+            }
+            if (it.key() == QByteArrayLiteral("kern")) {
+                ft.setKerning(it.value());
+            }
+            if (const auto tag = QFont::Tag::fromString(it.key());
+                tag.has_value()) {
+                ft.setFeature(*tag, it.value() ? 1u : 0u);
+            }
+        }
+        if (has_spacing) {
+            ft.setLetterSpacing(QFont::AbsoluteSpacing, m_letter_spacing);
+        }
     }
     return ft;
 }
@@ -1299,6 +1705,7 @@ void FontWidget::setLetterSpacing(qreal s)
     if (m_label_space) {
         m_label_space->setText(QString::number(m_letter_spacing, 'f', 1));
     }
+    updateFeaturePillsState();
     updateTabTextPreview();
 }
 
@@ -1377,6 +1784,7 @@ void FontWidget::changeEvent(QEvent *event)
     QWidget::changeEvent(event);
     if (event->type() == QEvent::PaletteChange
         || event->type() == QEvent::ApplicationPaletteChange) {
+        applyFeaturesNotePalette();
         applyInvertPreview();
         if (m_waterfall) {
             m_waterfall->update();
@@ -1399,6 +1807,7 @@ void FontWidget::onNameChanged()
     m_face_index = m_inspector.resolveFaceIndex(
         name, ui->comboBox_style->currentText());
     rebuildAxesBar(true);
+    rebuildFeaturesBar();
 
     onStyleChanged();
 }
@@ -1411,6 +1820,7 @@ void FontWidget::onStyleChanged()
     if (new_face != m_face_index) {
         m_face_index = new_face;
         rebuildAxesBar(false);
+        rebuildFeaturesBar();
     }
     syncAxesForStyle(style);
 
@@ -1557,16 +1967,110 @@ void FontWidget::refreshTextWidgetsFromFont()
     }
 }
 
+void FontWidget::updateGlyphInspectorFont(const QFont &glyph_font)
+{
+    if (!m_wnd_gi) {
+        return;
+    }
+    const FontDecorationMetrics deco
+        = m_inspector.decorationMetrics(m_face_index, m_axis_values);
+    const QChar ch                 = m_wnd_gi->hasSelection()
+                                         ? m_wnd_gi->currentChar()
+                                         : QChar();
+    const GlyphOutlineData outline = ch.isNull()
+        ? GlyphOutlineData{}
+        : m_inspector.glyphOutline(m_face_index, ch, m_axis_values);
+    m_wnd_gi->updateFont(glyph_font, deco, outline);
+}
+
 void FontWidget::refreshGlyphInspectorFromFont()
 {
     if (!m_wnd_gi) {
         return;
     }
-    const int pt           = getCurrentFontSize();
-    const QFont glyph_font = buildPreviewFont(pt, PreviewFontRole::Glyph);
-    const FontDecorationMetrics deco
-        = m_inspector.decorationMetrics(m_face_index, m_axis_values);
-    m_wnd_gi->updateFont(glyph_font, deco);
+    updateGlyphInspectorFont(
+        buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Glyph));
+}
+
+void FontWidget::refreshActiveTabFromFeatures()
+{
+    m_text_dirty   = true;
+    m_sample_dirty = true;
+
+    auto cur_wnd = ui->tabWidget->currentWidget();
+    if (cur_wnd == ui->tab_text) {
+        refreshTextWidgetsFromFont();
+        m_text_dirty = false;
+    }
+    else if (cur_wnd == ui->tab_sample) {
+        if (ui->label_sample) {
+            ui->label_sample->setFont(
+                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Text));
+        }
+        m_sample_dirty = false;
+    }
+}
+
+void FontWidget::setShowOutlinePoints(bool on)
+{
+    if (m_wnd_gi) {
+        m_wnd_gi->setShowOutlinePoints(on);
+    }
+}
+
+bool FontWidget::isShowOutlinePoints() const
+{
+    return m_wnd_gi ? m_wnd_gi->isShowOutlinePoints() : false;
+}
+
+void FontWidget::setFeatureEnabled(const QByteArray &tag, bool enabled)
+{
+    bool found     = false;
+    bool def_on    = false;
+    for (const FeaturePillControl &ctrl : m_feature_controls) {
+        if (ctrl.tag == tag) {
+            found  = true;
+            def_on = ctrl.default_on;
+            if (ctrl.button) {
+                QSignalBlocker blocker(ctrl.button);
+                ctrl.button->setChecked(enabled);
+            }
+            break;
+        }
+    }
+    if (!found) {
+        return;
+    }
+    if (enabled == def_on) {
+        m_feature_overrides.remove(tag);
+    }
+    else {
+        m_feature_overrides.insert(tag, enabled);
+    }
+    updateFeaturePillsState();
+    refreshActiveTabFromFeatures();
+}
+
+bool FontWidget::isFeatureEnabled(const QByteArray &tag) const
+{
+    for (const FeaturePillControl &ctrl : m_feature_controls) {
+        if (ctrl.tag == tag) {
+            return m_feature_overrides.value(tag, ctrl.default_on);
+        }
+    }
+    return false;
+}
+
+QVector<QPushButton *> FontWidget::featurePillButtons() const
+{
+    QVector<QPushButton *> result;
+    result.reserve(m_feature_controls.size());
+    for (const FeaturePillControl &ctrl : m_feature_controls) {
+        if (ctrl.button) {
+            result.append(ctrl.button);
+        }
+    }
+    return result;
 }
 
 void FontWidget::refreshActiveTabFromAxes()
@@ -1622,9 +2126,7 @@ void FontWidget::updateTabTextPreview()
     }
 
     if (m_wnd_gi) {
-        const FontDecorationMetrics deco
-            = m_inspector.decorationMetrics(m_face_index, m_axis_values);
-        m_wnd_gi->updateFont(glyph_font, deco);
+        updateGlyphInspectorFont(glyph_font);
         m_gi_dirty = false;
     }
     // The Sample tab shares the family/style/size state; only its text differs,
@@ -2024,6 +2526,7 @@ void FontWidget::updateTheme(int theme)
     if (m_wnd_gi) {
         m_wnd_gi->updateTheme(theme);
     }
+    applyFeaturesNotePalette();
     applyInvertPreview();
     if (m_waterfall) {
         m_waterfall->update();

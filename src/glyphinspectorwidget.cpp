@@ -1,9 +1,11 @@
 #include "glyphinspectorwidget.h"
 
+#include <QCheckBox>
 #include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
 #include <QRawFont>
@@ -110,23 +112,36 @@ void GlyphPreviewWidget::setGlyphData(QChar ch,
                                       const QFont &font,
                                       const QRectF &bbox,
                                       qreal advance_width,
-                                      const FontDecorationMetrics &deco)
+                                      const FontDecorationMetrics &deco,
+                                      const GlyphOutlineData &outline)
 {
     m_char          = ch;
     m_font          = font;
     m_bbox          = bbox;
     m_deco_metrics  = deco;
+    m_outline       = outline;
     m_advance_width = advance_width;
     m_has_data      = true;
+    update();
+}
+
+void GlyphPreviewWidget::setShowOutlinePoints(bool on)
+{
+    if (m_show_outline_points == on) {
+        return;
+    }
+    m_show_outline_points = on;
     update();
 }
 
 void GlyphPreviewWidget::clear()
 {
     m_has_data = false;
+    m_outline  = {};
     m_last_label_rects.clear();
     m_last_underline_band = {};
     m_last_strikeout_band = {};
+    m_last_outline_points.clear();
     update();
 }
 
@@ -142,6 +157,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     m_last_label_rects.clear();
     m_last_underline_band = {};
     m_last_strikeout_band = {};
+    m_last_outline_points.clear();
 
     QPainter painter(this);
     painter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
@@ -231,6 +247,9 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     }
     else if (display_raw.isValid() && display_raw.pixelSize() > 0.0) {
         em_px = display_raw.pixelSize();
+    }
+    else if (display_font.pixelSize() > 0) {
+        em_px = display_font.pixelSize();
     }
 
     const int upem         = m_deco_metrics.units_per_em;
@@ -357,6 +376,67 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     painter.setFont(display_font);
     painter.setPen(pal.text().color());
     painter.drawText(QPointF(text_x, text_y), QString(m_char));
+
+    // Overlay FreeType Bezier control points and tangent handles on top of the
+    // glyph and underneath metric labels when toggled on.
+    const int outline_upem = m_deco_metrics.units_per_em > 0
+                                 ? m_deco_metrics.units_per_em
+                                 : (display_raw.isValid()
+                                        ? qRound(display_raw.unitsPerEm())
+                                        : 0);
+    if (m_show_outline_points && m_outline.valid && outline_upem > 0
+        && em_px > 0.0 && !m_outline.points.isEmpty()
+        && m_outline.tags.size() == m_outline.points.size()) {
+        const qreal scale = em_px / outline_upem;
+        QVector<QPointF> screen_pts;
+        screen_pts.reserve(m_outline.points.size());
+        for (const QPointF &fp : m_outline.points) {
+            screen_pts.append(
+                QPointF(text_x + fp.x() * scale, text_y - fp.y() * scale));
+        }
+        m_last_outline_points = screen_pts;
+
+        QPen handle_pen(QColor(230, 125, 35, 165));
+        handle_pen.setWidthF(1.0);
+        painter.setPen(handle_pen);
+        int contour_start = 0;
+        for (int contour_end : m_outline.contour_ends) {
+            const int count = contour_end - contour_start + 1;
+            if (contour_start >= 0 && count >= 2
+                && contour_end < screen_pts.size()) {
+                for (int i = contour_start; i <= contour_end; ++i) {
+                    const int next
+                        = (i == contour_end) ? contour_start : (i + 1);
+                    if (m_outline.tags[i]
+                            != GlyphOutlineData::PointKind::OnCurve
+                        || m_outline.tags[next]
+                               != GlyphOutlineData::PointKind::OnCurve) {
+                        painter.drawLine(screen_pts[i], screen_pts[next]);
+                    }
+                }
+            }
+            if (contour_end >= contour_start) {
+                contour_start = contour_end + 1;
+            }
+        }
+
+        const QColor base_col = pal.base().color();
+        for (int i = 0; i < screen_pts.size(); ++i) {
+            const QPointF &pt = screen_pts[i];
+            if (m_outline.tags[i] == GlyphOutlineData::PointKind::OnCurve) {
+                painter.setPen(QPen(QColor(255, 255, 255, 220), 1.0));
+                painter.setBrush(QColor(35, 145, 255));
+                painter.drawRect(
+                    QRectF(pt.x() - 2.5, pt.y() - 2.5, 5.0, 5.0));
+            }
+            else {
+                painter.setPen(QPen(QColor(230, 125, 35), 1.5));
+                painter.setBrush(base_col);
+                painter.drawEllipse(pt, 2.5, 2.5);
+            }
+        }
+        painter.setBrush(Qt::NoBrush);
+    }
 
     // Draw metric labels measured against the widget font and kept within
     // bounds without overlapping each other.
@@ -515,12 +595,18 @@ void GlyphInspectorWidget::createUI()
     m_label_advance_width = new QLabel(this);
     m_label_bbox          = new QLabel(this);
     m_label_bearings      = new QLabel(this);
+    m_label_contours      = new QLabel(this);
+    m_label_points        = new QLabel(this);
     configureValueLabel(m_label_advance_width);
     configureValueLabel(m_label_bbox);
     configureValueLabel(m_label_bearings);
+    configureValueLabel(m_label_contours);
+    configureValueLabel(m_label_points);
     glyph_layout->addRow("Advance Width:", m_label_advance_width);
     glyph_layout->addRow("Bounding Box:", m_label_bbox);
     glyph_layout->addRow("Bearings:", m_label_bearings);
+    glyph_layout->addRow("Contours:", m_label_contours);
+    glyph_layout->addRow("Points:", m_label_points);
     main_layout->addWidget(m_group_glyph);
 
     // Font Metrics group
@@ -550,9 +636,29 @@ void GlyphInspectorWidget::createUI()
     // Visual Preview group
     m_group_preview     = new QGroupBox("Visual Preview", this);
     auto preview_layout = new QVBoxLayout(m_group_preview);
-    m_preview_widget    = new GlyphPreviewWidget(this);
+    auto preview_bar    = new QHBoxLayout();
+    preview_bar->setContentsMargins(0, 0, 0, 0);
+    m_chk_outline = new QCheckBox("Show Outline Points", this);
+    m_chk_outline->setFocusPolicy(Qt::NoFocus);
+    m_chk_outline->setChecked(m_show_outline_points);
+    preview_bar->addStretch(1);
+    preview_bar->addWidget(m_chk_outline);
+    preview_layout->addLayout(preview_bar);
+    m_preview_widget = new GlyphPreviewWidget(this);
+    m_preview_widget->setShowOutlinePoints(m_show_outline_points);
     preview_layout->addWidget(m_preview_widget, 1);
     main_layout->addWidget(m_group_preview, 1);
+
+    connect(m_chk_outline, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_show_outline_points == on) {
+            return;
+        }
+        m_show_outline_points = on;
+        if (m_preview_widget) {
+            m_preview_widget->setShowOutlinePoints(on);
+        }
+        emit sigShowOutlinePointsChanged(on);
+    });
 
     // Initially hide all groups
     m_group_unicode->hide();
@@ -561,15 +667,29 @@ void GlyphInspectorWidget::createUI()
     m_group_preview->hide();
 }
 
+void GlyphInspectorWidget::setShowOutlinePoints(bool on)
+{
+    m_show_outline_points = on;
+    if (m_chk_outline && m_chk_outline->isChecked() != on) {
+        QSignalBlocker blocker(m_chk_outline);
+        m_chk_outline->setChecked(on);
+    }
+    if (m_preview_widget) {
+        m_preview_widget->setShowOutlinePoints(on);
+    }
+}
+
 void GlyphInspectorWidget::updateGlyph(QChar ch,
                                        const QFont &font,
                                        const QString &font_path,
-                                       const FontDecorationMetrics &deco)
+                                       const FontDecorationMetrics &deco,
+                                       const GlyphOutlineData &outline)
 {
     m_char          = ch;
     m_font          = font;
     m_font_path     = font_path;
     m_deco_metrics  = deco;
+    m_outline       = outline;
     m_has_selection = !ch.isNull();
 
     if (m_has_selection) {
@@ -582,7 +702,8 @@ void GlyphInspectorWidget::updateGlyph(QChar ch,
         updateMetrics();
         updateLabels();
         m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box,
-                                       m_metrics.advance_width, m_deco_metrics);
+                                       m_metrics.advance_width, m_deco_metrics,
+                                       m_outline);
     }
     else {
         clearSelection();
@@ -592,6 +713,8 @@ void GlyphInspectorWidget::updateGlyph(QChar ch,
 void GlyphInspectorWidget::clearSelection()
 {
     m_has_selection = false;
+    m_char          = QChar();
+    m_outline       = {};
     m_label_no_selection->show();
     m_group_unicode->hide();
     m_group_glyph->hide();
@@ -609,15 +732,18 @@ QPixmap GlyphInspectorWidget::getPreviewPixmap() const
 }
 
 void GlyphInspectorWidget::updateFont(const QFont &font,
-                                      const FontDecorationMetrics &deco)
+                                      const FontDecorationMetrics &deco,
+                                      const GlyphOutlineData &outline)
 {
     m_deco_metrics = deco;
+    m_outline      = outline;
     if (m_has_selection) {
         m_font = font;
         updateMetrics();
         updateLabels();
         m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box,
-                                       m_metrics.advance_width, m_deco_metrics);
+                                       m_metrics.advance_width, m_deco_metrics,
+                                       m_outline);
     }
 }
 
@@ -691,6 +817,12 @@ void GlyphInspectorWidget::updateLabels()
     m_label_bearings->setText(QString("Left %1, Right %2")
                                   .arg(m_metrics.left_bearing, 0, 'f', 2)
                                   .arg(m_metrics.right_bearing, 0, 'f', 2));
+    m_label_contours->setText(
+        m_outline.valid ? QString::number(m_outline.contour_count)
+                        : QStringLiteral("N/A"));
+    m_label_points->setText(
+        m_outline.valid ? QString::number(m_outline.point_count)
+                        : QStringLiteral("N/A"));
 
     // Font metrics
     m_label_ascent->setText(QString("%1").arg(m_metrics.ascent, 0, 'f', 2));

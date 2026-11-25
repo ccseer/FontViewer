@@ -3,6 +3,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_MULTIPLE_MASTERS_H
+#include FT_OUTLINE_H
 #include FT_SFNT_NAMES_H
 #include FT_TRUETYPE_TABLES_H
 
@@ -189,6 +190,338 @@ const FontInspectionData &emptyInspectionData()
 {
     static const FontInspectionData kEmpty;
     return kEmpty;
+}
+
+bool readU16(const QByteArray &data, int off, quint16 *out)
+{
+    if (off < 0 || off + 2 > data.size()) {
+        return false;
+    }
+    const auto *p = reinterpret_cast<const uchar *>(data.constData() + off);
+    *out          = quint16((quint16(p[0]) << 8) | p[1]);
+    return true;
+}
+
+bool readAsciiTag(const QByteArray &data, int off, QByteArray *out)
+{
+    if (off < 0 || off + 4 > data.size()) {
+        return false;
+    }
+    QByteArray tag(data.constData() + off, 4);
+    for (uchar ch : tag) {
+        if (ch < 0x20 || ch > 0x7E) {
+            return false;
+        }
+    }
+    *out = tag;
+    return true;
+}
+
+int parsePrefixedTwoDigitTag(const QByteArray &tag, char c0, char c1, int lo,
+                             int hi)
+{
+    if (tag.size() != 4 || tag[0] != c0 || tag[1] != c1) {
+        return -1;
+    }
+    if (tag[2] < '0' || tag[2] > '9' || tag[3] < '0' || tag[3] > '9') {
+        return -1;
+    }
+    const int n = (tag[2] - '0') * 10 + (tag[3] - '0');
+    return (n >= lo && n <= hi) ? n : -1;
+}
+
+QString standardFeatureName(const QByteArray &tag)
+{
+    struct FeatureLabel {
+        const char *tag;
+        const char *name;
+    };
+    static constexpr FeatureLabel kLabels[] = {
+        {"liga", "Standard Ligatures"},
+        {"dlig", "Discretionary Ligatures"},
+        {"calt", "Contextual Alternates"},
+        {"kern", "Kerning"},
+        {"smcp", "Small Capitals"},
+        {"c2sc", "Small Capitals From Capitals"},
+        {"tnum", "Tabular Figures"},
+        {"onum", "Oldstyle Figures"},
+        {"frac", "Fractions"},
+        {"zero", "Slashed Zero"},
+        {"lnum", "Lining Figures"},
+        {"pnum", "Proportional Figures"},
+        {"aalt", "Access All Alternates"},
+        {"salt", "Stylistic Alternates"},
+        {"hist", "Historical Forms"},
+        {"swsh", "Swash"},
+        {"cswh", "Contextual Swash"},
+        {"ordn", "Ordinals"},
+        {"sups", "Superscript"},
+        {"subs", "Subscript"},
+        {"pcap", "Petite Capitals"},
+        {"case", "Case-Sensitive Forms"},
+        {"titl", "Titling"},
+        {"clig", "Contextual Ligatures"},
+        {"hlig", "Historical Ligatures"},
+        {"rlig", "Required Ligatures"},
+        {"ccmp", "Glyph Composition / Decomposition"},
+        {"mark", "Mark Positioning"},
+        {"mkmk", "Mark to Mark Positioning"},
+    };
+    for (const auto &entry : kLabels) {
+        if (tag == entry.tag) {
+            return QString::fromLatin1(entry.name);
+        }
+    }
+    if (const int ss = parsePrefixedTwoDigitTag(tag, 's', 's', 1, 20);
+        ss > 0) {
+        return QStringLiteral("Stylistic Set %1").arg(ss);
+    }
+    if (const int cv = parsePrefixedTwoDigitTag(tag, 'c', 'v', 1, 99);
+        cv > 0) {
+        return QStringLiteral("Character Variant %1").arg(cv);
+    }
+    return QString::fromLatin1(tag);
+}
+
+int featureSortGroup(const QByteArray &tag, int *suborder)
+{
+    static constexpr const char *kCommonOrder[] = {
+        "liga", "dlig", "calt", "kern", "smcp",
+        "c2sc", "tnum", "onum", "frac", "zero",
+    };
+    for (int i = 0; i < int(std::size(kCommonOrder)); ++i) {
+        if (tag == kCommonOrder[i]) {
+            *suborder = i;
+            return 0;
+        }
+    }
+    if (const int ss = parsePrefixedTwoDigitTag(tag, 's', 's', 1, 20);
+        ss > 0) {
+        *suborder = ss;
+        return 1;
+    }
+    if (const int cv = parsePrefixedTwoDigitTag(tag, 'c', 'v', 1, 99);
+        cv > 0) {
+        *suborder = cv;
+        return 2;
+    }
+    *suborder = 0;
+    return 3;
+}
+
+bool isDefaultOnFeature(const QByteArray &tag)
+{
+    return tag == QByteArrayLiteral("liga")
+           || tag == QByteArrayLiteral("clig")
+           || tag == QByteArrayLiteral("calt")
+           || tag == QByteArrayLiteral("kern")
+           || tag == QByteArrayLiteral("rlig")
+           || tag == QByteArrayLiteral("ccmp")
+           || tag == QByteArrayLiteral("mark")
+           || tag == QByteArrayLiteral("mkmk")
+           || tag == QByteArrayLiteral("rclt")
+           || tag == QByteArrayLiteral("abvm")
+           || tag == QByteArrayLiteral("blwm")
+           || tag == QByteArrayLiteral("dist")
+           || tag == QByteArrayLiteral("curs");
+}
+
+void collectLangSysFeatures(const QByteArray &table,
+                            int lang_off,
+                            const QByteArray &lang_tag,
+                            QHash<quint16, QStringList> &ref_langs)
+{
+    quint16 req_idx    = 0xFFFF;
+    quint16 feat_count = 0;
+    if (!readU16(table, lang_off + 2, &req_idx)
+        || !readU16(table, lang_off + 4, &feat_count)) {
+        return;
+    }
+    const QString lang_str = QString::fromLatin1(lang_tag).trimmed();
+    if (req_idx != 0xFFFF) {
+        QStringList &langs = ref_langs[req_idx];
+        if (!lang_str.isEmpty() && !langs.contains(lang_str)) {
+            langs.append(lang_str);
+        }
+    }
+    const int max_count = qMax(0, (table.size() - (lang_off + 6)) / 2);
+    const int count     = qMin<int>(feat_count, max_count);
+    for (int i = 0; i < count; ++i) {
+        quint16 idx = 0;
+        if (readU16(table, lang_off + 6 + i * 2, &idx)) {
+            QStringList &langs = ref_langs[idx];
+            if (!lang_str.isEmpty() && !langs.contains(lang_str)) {
+                langs.append(lang_str);
+            }
+        }
+    }
+}
+
+void parseOtLayoutTable(FT_Face face,
+                        FT_ULong table_tag,
+                        bool is_gsub,
+                        const QHash<quint16, QString> &names,
+                        QHash<QByteArray, QString> &features_out,
+                        QStringList &locl_langs_out)
+{
+    FT_ULong len = 0;
+    if (FT_Load_Sfnt_Table(face, table_tag, 0, nullptr, &len) != 0 || len < 10
+        || len > 32u * 1024u * 1024u) {
+        return;
+    }
+    QByteArray table(int(len), Qt::Uninitialized);
+    if (FT_Load_Sfnt_Table(face, table_tag, 0,
+                           reinterpret_cast<FT_Byte *>(table.data()), &len)
+        != 0) {
+        return;
+    }
+
+    quint16 major            = 0;
+    quint16 minor            = 0;
+    quint16 script_list_off  = 0;
+    quint16 feature_list_off = 0;
+    if (!readU16(table, 0, &major) || !readU16(table, 2, &minor)
+        || !readU16(table, 4, &script_list_off)
+        || !readU16(table, 6, &feature_list_off) || major != 1 || minor > 1) {
+        return;
+    }
+
+    // Collect only FeatureIndex entries referenced by at least one Script/LangSys.
+    QHash<quint16, QStringList> ref_langs;
+    quint16 script_count = 0;
+    if (script_list_off > 0 && readU16(table, script_list_off, &script_count)) {
+        const int max_scripts
+            = qMax(0, (table.size() - (script_list_off + 2)) / 6);
+        const int count = qMin<int>(script_count, max_scripts);
+        for (int s = 0; s < count; ++s) {
+            const int rec_off = script_list_off + 2 + s * 6;
+            quint16 rel_script = 0;
+            if (!readU16(table, rec_off + 4, &rel_script) || rel_script == 0) {
+                continue;
+            }
+            const int script_off   = script_list_off + rel_script;
+            quint16 def_lang_off   = 0;
+            quint16 lang_sys_count = 0;
+            if (!readU16(table, script_off, &def_lang_off)
+                || !readU16(table, script_off + 2, &lang_sys_count)) {
+                continue;
+            }
+            if (def_lang_off != 0) {
+                collectLangSysFeatures(table, script_off + def_lang_off,
+                                       QByteArrayLiteral("dflt"), ref_langs);
+            }
+            const int max_langs
+                = qMax(0, (table.size() - (script_off + 4)) / 6);
+            const int lcount = qMin<int>(lang_sys_count, max_langs);
+            for (int l = 0; l < lcount; ++l) {
+                const int lrec = script_off + 4 + l * 6;
+                QByteArray ltag;
+                quint16 rel_lang = 0;
+                if (readAsciiTag(table, lrec, &ltag)
+                    && readU16(table, lrec + 4, &rel_lang) && rel_lang != 0) {
+                    collectLangSysFeatures(table, script_off + rel_lang, ltag,
+                                           ref_langs);
+                }
+            }
+        }
+    }
+
+    quint16 feat_count = 0;
+    if (feature_list_off == 0
+        || !readU16(table, feature_list_off, &feat_count)) {
+        return;
+    }
+    const int max_feats = qMax(0, (table.size() - (feature_list_off + 2)) / 6);
+    const int fcount    = qMin<int>(feat_count, max_feats);
+    for (int f = 0; f < fcount; ++f) {
+        const quint16 idx = quint16(f);
+        auto ref_it       = ref_langs.constFind(idx);
+        if (ref_it == ref_langs.constEnd()) {
+            continue;
+        }
+        const int rec_off = feature_list_off + 2 + f * 6;
+        QByteArray ftag;
+        quint16 rel_feat = 0;
+        if (!readAsciiTag(table, rec_off, &ftag)
+            || !readU16(table, rec_off + 4, &rel_feat) || rel_feat == 0) {
+            continue;
+        }
+
+        if (ftag == QByteArrayLiteral("locl")) {
+            if (is_gsub) {
+                for (const QString &l : ref_it.value()) {
+                    if (l != QLatin1String("dflt")
+                        && !locl_langs_out.contains(l)) {
+                        locl_langs_out.append(l);
+                    }
+                }
+            }
+            continue;
+        }
+
+        QString custom_name;
+        const int feat_off = feature_list_off + rel_feat;
+        quint16 params_rel = 0;
+        if (readU16(table, feat_off, &params_rel) && params_rel != 0) {
+            const int params_off = feat_off + params_rel;
+            const bool has_ui_name
+                = (parsePrefixedTwoDigitTag(ftag, 's', 's', 1, 20) > 0)
+                  || (parsePrefixedTwoDigitTag(ftag, 'c', 'v', 1, 99) > 0);
+            if (has_ui_name) {
+                quint16 params_ver = 0xFFFF;
+                quint16 ui_name_id = 0;
+                if (readU16(table, params_off, &params_ver) && params_ver == 0
+                    && readU16(table, params_off + 2, &ui_name_id)
+                    && ui_name_id >= 256 && ui_name_id != 0xFFFF) {
+                    custom_name = names.value(ui_name_id);
+                }
+            }
+        }
+
+        auto existing = features_out.find(ftag);
+        if (existing == features_out.end()
+            || (existing.value().isEmpty() && !custom_name.isEmpty())) {
+            features_out.insert(ftag, custom_name);
+        }
+    }
+}
+
+void extractOtFeatures(FT_Face face,
+                       const QHash<quint16, QString> &names,
+                       QVector<FontFeatureInfo> &features_out,
+                       QStringList &locl_langs_out)
+{
+    QHash<QByteArray, QString> merged;
+    parseOtLayoutTable(face, FT_MAKE_TAG('G', 'S', 'U', 'B'), true, names,
+                       merged, locl_langs_out);
+    parseOtLayoutTable(face, FT_MAKE_TAG('G', 'P', 'O', 'S'), false, names,
+                       merged, locl_langs_out);
+
+    features_out.reserve(merged.size());
+    for (auto it = merged.constBegin(); it != merged.constEnd(); ++it) {
+        FontFeatureInfo info;
+        info.tag           = it.key();
+        info.friendly_name = it.value().isEmpty()
+                                 ? standardFeatureName(info.tag)
+                                 : it.value();
+        info.default_on    = isDefaultOnFeature(info.tag);
+        features_out.append(std::move(info));
+    }
+
+    std::sort(features_out.begin(), features_out.end(),
+              [](const FontFeatureInfo &a, const FontFeatureInfo &b) {
+                  int sub_a    = 0;
+                  int sub_b    = 0;
+                  const int ga = featureSortGroup(a.tag, &sub_a);
+                  const int gb = featureSortGroup(b.tag, &sub_b);
+                  if (ga != gb) {
+                      return ga < gb;
+                  }
+                  if (sub_a != sub_b) {
+                      return sub_a < sub_b;
+                  }
+                  return a.tag < b.tag;
+              });
 }
 }  // namespace
 
@@ -394,6 +727,9 @@ void FontInspectorEngine::populateFace(FaceEntry &entry)
             FT_Done_MM_Var(m_library, mm_var);
         }
     }
+
+    extractOtFeatures(face, names, entry.data.ot_features,
+                      entry.data.locl_languages);
 }
 
 QString FontInspectorEngine::normalizeStyleName(const QString &name)
@@ -522,6 +858,62 @@ std::optional<FontNamedInstance> FontInspectorEngine::matchNamedInstance(
     return std::nullopt;
 }
 
+void FontInspectorEngine::applyAxisCoords(
+    FaceEntry &entry, const QHash<QByteArray, float> &axis_coords)
+{
+    FT_Face face     = entry.face;
+    const auto &axes = entry.data.variable_axes;
+    if (!face || axes.isEmpty() || !FT_HAS_MULTIPLE_MASTERS(face)) {
+        return;
+    }
+
+    QVector<FT_Fixed> coords(axes.size());
+    for (int i = 0; i < axes.size(); ++i) {
+        auto it   = axis_coords.constFind(axes[i].tag);
+        float val = (it != axis_coords.constEnd() && qIsFinite(it.value()))
+                        ? it.value()
+                        : axes[i].default_value;
+        val       = qBound(axes[i].min_value, val, axes[i].max_value);
+        coords[i] = floatToFixed(val);
+    }
+
+    // Skip re-applying identical coordinates: FreeType returns -1
+    // ("no change") from FT_Set_Var_Design_Coordinates and skips
+    // tt_apply_mvar(), so overwriting post/OS/2 first would clobber active
+    // MVAR deltas back to defaults.
+    if (!entry.has_applied_coords || entry.applied_coords != coords) {
+        // FreeType's tt_apply_mvar() skips writing fields whose delta is 0,
+        // so returning to default coords leaves prior non-zero deltas behind
+        // unless the unmodified baseline fields are restored first.
+        const FontDecorationMetrics &def = entry.data.decoration_metrics;
+        if (def.has_underline) {
+            if (auto *post = static_cast<TT_Postscript *>(
+                    FT_Get_Sfnt_Table(face, FT_SFNT_POST))) {
+                post->underlinePosition  = FT_Short(def.underline_pos);
+                post->underlineThickness = FT_Short(def.underline_thick);
+            }
+        }
+        if (def.has_strikeout) {
+            if (auto *os2 = static_cast<TT_OS2 *>(
+                    FT_Get_Sfnt_Table(face, FT_SFNT_OS2))) {
+                os2->yStrikeoutPosition = FT_Short(def.strikeout_pos);
+                os2->yStrikeoutSize     = FT_Short(def.strikeout_size);
+            }
+        }
+
+        // Triggers tt_apply_mvar so post / OS/2 reflect active coords.
+        if (FT_Set_Var_Design_Coordinates(face, FT_UInt(coords.size()),
+                                          coords.data())
+            == 0) {
+            entry.applied_coords     = std::move(coords);
+            entry.has_applied_coords = true;
+        }
+        else {
+            entry.has_applied_coords = false;
+        }
+    }
+}
+
 FontDecorationMetrics FontInspectorEngine::decorationMetrics(
     int face_index, const QHash<QByteArray, float> &axis_coords)
 {
@@ -534,56 +926,75 @@ FontDecorationMetrics FontInspectorEngine::decorationMetrics(
         return {};
     }
 
-    const auto &axes = entry.data.variable_axes;
-    if (!axes.isEmpty() && FT_HAS_MULTIPLE_MASTERS(face)) {
-        QVector<FT_Fixed> coords(axes.size());
-        for (int i = 0; i < axes.size(); ++i) {
-            auto it   = axis_coords.constFind(axes[i].tag);
-            float val = (it != axis_coords.constEnd() && qIsFinite(it.value()))
-                            ? it.value()
-                            : axes[i].default_value;
-            val       = qBound(axes[i].min_value, val, axes[i].max_value);
-            coords[i] = floatToFixed(val);
-        }
+    applyAxisCoords(entry, axis_coords);
+    return readDecorationMetricsFromFace(face);
+}
 
-        // Skip re-applying identical coordinates: FreeType returns -1
-        // ("no change") from FT_Set_Var_Design_Coordinates and skips
-        // tt_apply_mvar(), so overwriting post/OS/2 first would clobber active
-        // MVAR deltas back to defaults.
-        if (!entry.has_applied_coords || entry.applied_coords != coords) {
-            // FreeType's tt_apply_mvar() skips writing fields whose delta is 0,
-            // so returning to default coords leaves prior non-zero deltas
-            // behind unless the unmodified baseline fields are restored first.
-            const FontDecorationMetrics &def = entry.data.decoration_metrics;
-            if (def.has_underline) {
-                if (auto *post = static_cast<TT_Postscript *>(
-                        FT_Get_Sfnt_Table(face, FT_SFNT_POST))) {
-                    post->underlinePosition  = FT_Short(def.underline_pos);
-                    post->underlineThickness = FT_Short(def.underline_thick);
-                }
-            }
-            if (def.has_strikeout) {
-                if (auto *os2 = static_cast<TT_OS2 *>(
-                        FT_Get_Sfnt_Table(face, FT_SFNT_OS2))) {
-                    os2->yStrikeoutPosition = FT_Short(def.strikeout_pos);
-                    os2->yStrikeoutSize     = FT_Short(def.strikeout_size);
-                }
-            }
-
-            // Triggers tt_apply_mvar so post / OS/2 reflect active coords.
-            if (FT_Set_Var_Design_Coordinates(face, FT_UInt(coords.size()),
-                                              coords.data())
-                == 0) {
-                entry.applied_coords     = std::move(coords);
-                entry.has_applied_coords = true;
-            }
-            else {
-                entry.has_applied_coords = false;
-            }
-        }
+GlyphOutlineData FontInspectorEngine::glyphOutline(
+    int face_index, QChar ch, const QHash<QByteArray, float> &axis_coords)
+{
+    if (face_index < 0 || face_index >= m_faces.size() || ch.isNull()) {
+        return {};
+    }
+    FaceEntry &entry = m_faces[face_index];
+    FT_Face face     = entry.face;
+    if (!face) {
+        return {};
     }
 
-    return readDecorationMetricsFromFace(face);
+    const FT_UInt glyph_index
+        = FT_Get_Char_Index(face, FT_ULong(ch.unicode()));
+    if (glyph_index == 0) {
+        return {};
+    }
+
+    applyAxisCoords(entry, axis_coords);
+
+    if (FT_Load_Glyph(face, glyph_index, FT_LOAD_NO_SCALE | FT_LOAD_NO_BITMAP)
+        != 0) {
+        return {};
+    }
+    if (face->glyph->format != FT_GLYPH_FORMAT_OUTLINE) {
+        return {};
+    }
+
+    const FT_Outline &ol = face->glyph->outline;
+    if (ol.n_contours <= 0 || ol.n_points <= 0 || !ol.points || !ol.tags
+        || !ol.contours) {
+        return {};
+    }
+
+    GlyphOutlineData out;
+    out.valid         = true;
+    out.contour_count = int(ol.n_contours);
+    out.point_count   = int(ol.n_points);
+    out.points.reserve(out.point_count);
+    out.tags.reserve(out.point_count);
+    out.contour_ends.reserve(out.contour_count);
+
+    for (int i = 0; i < out.point_count; ++i) {
+        out.points.append(
+            QPointF(qreal(ol.points[i].x), qreal(ol.points[i].y)));
+        const char tag_bits = FT_CURVE_TAG(ol.tags[i]);
+        if (tag_bits == FT_CURVE_TAG_ON) {
+            out.tags.append(GlyphOutlineData::OnCurve);
+        }
+        else if (tag_bits == FT_CURVE_TAG_CUBIC) {
+            out.tags.append(GlyphOutlineData::OffCubic);
+        }
+        else {
+            out.tags.append(GlyphOutlineData::OffConic);
+        }
+    }
+    for (int c = 0; c < out.contour_count; ++c) {
+        const int end  = int(ol.contours[c]);
+        const int prev = c == 0 ? -1 : out.contour_ends.last();
+        if (end <= prev || end >= out.point_count) {
+            return {};
+        }
+        out.contour_ends.append(end);
+    }
+    return out;
 }
 
 QString FontInspectorEngine::probeSampleForFace(int face_index) const
