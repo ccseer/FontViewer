@@ -20,7 +20,9 @@ if(MSVC)
     )
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg Test)
+
+enable_testing()
 
 include(FetchContent)
 FetchContent_Declare(SeerSdk
@@ -30,16 +32,37 @@ FetchContent_Declare(SeerSdk
 )
 FetchContent_MakeAvailable(SeerSdk)
 
-add_library(fontviewer SHARED
+# The viewer sources are compiled once and shared by the shipping DLL and the
+# test binary, so the tests exercise the exact objects that ship.
+set(FONTVIEWER_SOURCES
     characterwidget.cpp
+    fontpreviewedit.cpp
+    fontpreviewedit.h
     fontviewer.cpp
     fontwidget.cpp
     fontwidget.ui
     fontinfo.cpp
     glyphinspectorwidget.cpp
+    waterfallwidget.cpp
+    waterfallwidget.h
     ${seersdk_SOURCE_DIR}/seer/viewerbase.h
 )
 
+add_library(fontviewer_core OBJECT ${FONTVIEWER_SOURCES})
+target_include_directories(fontviewer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(fontviewer_core PRIVATE
+    SeerSdk::SeerSdk
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Svg
+)
+target_compile_definitions(fontviewer_core PRIVATE
+    COMPANY_NAME="1218.io"
+    PRODUCT_NAME="Seer"
+)
+
+add_library(fontviewer SHARED $<TARGET_OBJECTS:fontviewer_core>)
 target_link_libraries(fontviewer PRIVATE
     SeerSdk::SeerSdk
     Qt6::Core
@@ -49,13 +72,9 @@ target_link_libraries(fontviewer PRIVATE
 )
 
 set_target_properties(fontviewer PROPERTIES
+    LINKER_LANGUAGE CXX
     OUTPUT_NAME "fontviewer"
     SUFFIX ".dll"
-)
-
-target_compile_definitions(fontviewer PRIVATE
-    COMPANY_NAME="1218.io"
-    PRODUCT_NAME="Seer"
 )
 
 add_executable(test_fontviewer WIN32 test.cpp)
@@ -67,3 +86,37 @@ target_link_libraries(test_fontviewer PRIVATE
     Qt6::Widgets
     Qt6::Svg
 )
+
+# Offscreen regression suite for the viewer itself. Tests that need a real font
+# read its path from FONTVIEWER_TEST_FONT and skip when it is unset.
+add_executable(fontviewer_tests
+    tests/viewer_tests.cpp
+    $<TARGET_OBJECTS:fontviewer_core>
+)
+target_include_directories(fontviewer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(fontviewer_tests PRIVATE
+    SeerSdk::SeerSdk
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Svg
+    Qt6::Test
+)
+
+add_test(NAME fontviewer_ui COMMAND fontviewer_tests)
+set_tests_properties(fontviewer_ui PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+if(WIN32)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
+        set_property(TEST fontviewer_ui APPEND PROPERTY
+            ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        )
+    else()
+        set_tests_properties(fontviewer_ui PROPERTIES
+            ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;PATH=$<TARGET_FILE_DIR:Qt6::Core>\\;$ENV{PATH}"
+        )
+    endif()
+endif()

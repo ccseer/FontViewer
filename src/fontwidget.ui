@@ -94,25 +94,53 @@
       <attribute name="title">
        <string/>
       </attribute>
-      <layout class="QGridLayout" name="gridLayout_tab_text">
+      <layout class="QGridLayout" name="gridLayout_tab_text"/>
+     </widget>
+     <widget class="QWidget" name="tab_sample">
+      <attribute name="title">
+       <string/>
+      </attribute>
+      <layout class="QGridLayout" name="gridLayout_tab_sample">
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
        <item row="0" column="0">
-        <layout class="QHBoxLayout" name="horizontalLayout_text">
-         <item>
-          <widget class="QComboBox" name="comboBox_text"/>
-         </item>
-        </layout>
-       </item>
-       <item row="1" column="0">
-        <widget class="QScrollArea" name="scrollArea_text">
+        <widget class="QScrollArea" name="scrollArea_sample">
+         <property name="frameShape">
+          <enum>QFrame::Shape::NoFrame</enum>
+         </property>
          <property name="widgetResizable">
           <bool>true</bool>
          </property>
-         <widget class="QWidget" name="scrollAreaWidgetContents">
-          <layout class="QGridLayout" name="gridLayout_2">
-           <item row="1" column="0">
-            <widget class="QLabel" name="label_preview">
+         <widget class="QWidget" name="scrollAreaWidgetContents_sample">
+          <property name="geometry">
+           <rect>
+            <x>0</x>
+            <y>0</y>
+            <width>380</width>
+            <height>260</height>
+           </rect>
+          </property>
+          <layout class="QGridLayout" name="gridLayout_sample">
+           <item row="0" column="0">
+            <widget class="QLabel" name="label_sample">
              <property name="text">
               <string/>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignmentFlag::AlignCenter</set>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
              </property>
             </widget>
            </item>
@@ -121,12 +149,6 @@
         </widget>
        </item>
       </layout>
-     </widget>
-     <widget class="QWidget" name="tab_sample">
-      <attribute name="title">
-       <string/>
-      </attribute>
-      <layout class="QGridLayout" name="gridLayout_tab_sample"/>
      </widget>
     </widget>
    </item>

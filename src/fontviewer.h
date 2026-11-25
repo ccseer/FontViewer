@@ -24,10 +24,13 @@ public:
 protected:
     void loadImpl(QBoxLayout *layout_content,
                   QHBoxLayout *layout_control_bar) override;
-    QString getIniPath() const;
+    virtual QString getIniPath() const;
 
     QSettings *m_ini;
     FontWidget *m_view;
+    // False when the stored font_size was unusable and the view fell back to the
+    // default; the invalid value must then be left in the file untouched.
+    bool m_font_size_valid = false;
 };
 
 /////////////////////////////////////////////////////////////////
