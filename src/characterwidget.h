@@ -101,7 +101,7 @@ private:
     QVector<ushort> m_char_indexes;
     QFont m_ft;
     ushort m_last_key     = 0;
-    uchar m_sz_square     = 0;
+    int m_sz_square       = 16;
     const uchar m_columns = 16;
 };
 

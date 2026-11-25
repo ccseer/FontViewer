@@ -1490,58 +1490,67 @@ void FontWidget::probeVariableAxisBackend()
         return;
     }
 
-    const auto &axes = m_inspector.inspectFace(m_face_index).variable_axes;
-    const FontVariableAxisInfo *probe_axis = nullptr;
+    const auto &axes      = m_inspector.inspectFace(m_face_index).variable_axes;
+    bool has_varying_axis = false;
     for (const FontVariableAxisInfo &ax : axes) {
-        if (ax.min_value < ax.max_value) {
-            probe_axis = &ax;
+        if (ax.min_value < ax.max_value
+            && QFont::Tag::fromString(ax.tag).has_value()) {
+            has_varying_axis = true;
             break;
         }
     }
-    if (!probe_axis) {
-        m_axes_warning->hide();
-        return;
-    }
-
-    const auto tag = QFont::Tag::fromString(probe_axis->tag);
-    if (!tag.has_value()) {
+    if (!has_varying_axis) {
         m_axes_warning->hide();
         return;
     }
 
     m_gdi_probed      = true;
     const QString fam = ui->comboBox_family->currentText();
-    QFont f_min(fam);
-    QFont f_max(fam);
-    f_min.setPointSize(48);
-    f_max.setPointSize(48);
-    f_min.setVariableAxis(*tag, probe_axis->min_value);
-    f_max.setVariableAxis(*tag, probe_axis->max_value);
-
-    QString sample = m_inspector.probeSampleForFace(m_face_index);
+    QString sample    = m_inspector.probeSampleForFace(m_face_index);
     if (sample.isEmpty()) {
         sample = QStringLiteral("Hamburgefonstiv");
     }
-    const qreal w_min    = QFontMetricsF(f_min, this).horizontalAdvance(sample);
-    const qreal w_max    = QFontMetricsF(f_max, this).horizontalAdvance(sample);
 
-    bool same = (qAbs(w_min - w_max) < 0.05);
-    if (same) {
-        auto render_probe = [&sample](const QFont &f) {
-            QImage img(160, 64, QImage::Format_ARGB32_Premultiplied);
-            img.fill(Qt::white);
-            QPainter p(&img);
-            p.setRenderHint(QPainter::TextAntialiasing, true);
-            p.setFont(f);
-            p.setPen(Qt::black);
-            p.drawText(QPointF(8.0, 46.0), sample);
-            p.end();
-            return img;
-        };
-        same = (render_probe(f_min) == render_probe(f_max));
+    auto render_probe = [&sample](const QFont &f) {
+        QImage img(160, 64, QImage::Format_ARGB32_Premultiplied);
+        img.fill(Qt::white);
+        QPainter p(&img);
+        p.setRenderHint(QPainter::TextAntialiasing, true);
+        p.setFont(f);
+        p.setPen(Qt::black);
+        p.drawText(QPointF(8.0, 46.0), sample);
+        p.end();
+        return img;
+    };
+
+    bool any_effect = false;
+    for (const FontVariableAxisInfo &ax : axes) {
+        if (ax.min_value >= ax.max_value) {
+            continue;
+        }
+        const auto tag = QFont::Tag::fromString(ax.tag);
+        if (!tag.has_value()) {
+            continue;
+        }
+        QFont f_min(fam);
+        QFont f_max(fam);
+        f_min.setPointSize(48);
+        f_max.setPointSize(48);
+        f_min.setVariableAxis(*tag, ax.min_value);
+        f_max.setVariableAxis(*tag, ax.max_value);
+
+        const qreal w_min
+            = QFontMetricsF(f_min, this).horizontalAdvance(sample);
+        const qreal w_max
+            = QFontMetricsF(f_max, this).horizontalAdvance(sample);
+        if (qAbs(w_min - w_max) >= 0.05
+            || render_probe(f_min) != render_probe(f_max)) {
+            any_effect = true;
+            break;
+        }
     }
 
-    m_gdi_inactive = same;
+    m_gdi_inactive = !any_effect;
     m_axes_warning->setVisible(m_gdi_inactive);
 }
 
@@ -1584,6 +1593,11 @@ bool FontWidget::init(const QString &p)
 
     onNameChanged();
     onTabChanged();
+    if (m_wnd_char && m_char_dirty) {
+        m_wnd_char->updateFont(
+            buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Glyph));
+        m_char_dirty = false;
+    }
     updateTheme(m_theme);
     clearViewerFocus();
     return true;

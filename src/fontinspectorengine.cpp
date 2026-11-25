@@ -9,6 +9,7 @@
 
 #include <QFile>
 #include <QHash>
+#include <QSet>
 #include <QtMath>
 #include <QtNumeric>
 
@@ -51,7 +52,13 @@ float fixedToFloat(FT_Fixed value)
 
 FT_Fixed floatToFixed(float value)
 {
-    return FT_Fixed(qRound64(double(value) * 65536.0));
+    if (!qIsFinite(value)) {
+        return 0;
+    }
+    const qint64 scaled = qRound64(double(value) * 65536.0);
+    const qint64 lo     = std::numeric_limits<FT_Fixed>::min();
+    const qint64 hi     = std::numeric_limits<FT_Fixed>::max();
+    return FT_Fixed(qBound(lo, scaled, hi));
 }
 
 QByteArray tagToBytes(FT_ULong tag)
@@ -361,7 +368,8 @@ bool isDefaultOnFeature(const QByteArray &tag)
 
 void collectLangSysFeatures(const QByteArray &table,
                             int lang_off,
-                            const QByteArray &lang_tag,
+                            const QStringList &langs,
+                            int feature_count,
                             QHash<quint16, QStringList> &ref_langs)
 {
     quint16 req_idx    = 0xFFFF;
@@ -370,22 +378,28 @@ void collectLangSysFeatures(const QByteArray &table,
         || !readU16(table, lang_off + 4, &feat_count)) {
         return;
     }
-    const QString lang_str = QString::fromLatin1(lang_tag).trimmed();
-    if (req_idx != 0xFFFF) {
-        QStringList &langs = ref_langs[req_idx];
-        if (!lang_str.isEmpty() && !langs.contains(lang_str)) {
-            langs.append(lang_str);
+    QSet<quint16> seen_indices;
+    auto add_langs = [&](quint16 idx) {
+        if (int(idx) >= feature_count || seen_indices.contains(idx)) {
+            return;
         }
+        seen_indices.insert(idx);
+        QStringList &dst = ref_langs[idx];
+        for (const QString &l : langs) {
+            if (!dst.contains(l)) {
+                dst.append(l);
+            }
+        }
+    };
+    if (req_idx != 0xFFFF) {
+        add_langs(req_idx);
     }
     const int max_count = qMax(0, (table.size() - (lang_off + 6)) / 2);
     const int count     = qMin<int>(feat_count, max_count);
     for (int i = 0; i < count; ++i) {
         quint16 idx = 0;
         if (readU16(table, lang_off + 6 + i * 2, &idx)) {
-            QStringList &langs = ref_langs[idx];
-            if (!lang_str.isEmpty() && !langs.contains(lang_str)) {
-                langs.append(lang_str);
-            }
+            add_langs(idx);
         }
     }
 }
@@ -419,10 +433,31 @@ void parseOtLayoutTable(FT_Face face,
         return;
     }
 
+    quint16 feat_count = 0;
+    if (feature_list_off == 0
+        || !readU16(table, feature_list_off, &feat_count)) {
+        return;
+    }
+    const int max_feats = qMax(0, (table.size() - (feature_list_off + 2)) / 6);
+    const int fcount    = qMin<int>(feat_count, max_feats);
+
     // Collect only FeatureIndex entries referenced by at least one Script/LangSys.
+    // Deduplicate Script and LangSys offsets so crafted tables cannot amplify
+    // parsing into cubic/quadratic traversal work.
     QHash<quint16, QStringList> ref_langs;
+    QHash<int, QStringList> lang_tags_by_off;
+    auto record_lang = [&lang_tags_by_off](int lang_off,
+                                           const QByteArray &lang_tag) {
+        QStringList &tags      = lang_tags_by_off[lang_off];
+        const QString lang_str = QString::fromLatin1(lang_tag).trimmed();
+        if (!lang_str.isEmpty() && !tags.contains(lang_str)) {
+            tags.append(lang_str);
+        }
+    };
+
     quint16 script_count = 0;
     if (script_list_off > 0 && readU16(table, script_list_off, &script_count)) {
+        QSet<int> visited_scripts;
         const int max_scripts
             = qMax(0, (table.size() - (script_list_off + 2)) / 6);
         const int count = qMin<int>(script_count, max_scripts);
@@ -432,7 +467,12 @@ void parseOtLayoutTable(FT_Face face,
             if (!readU16(table, rec_off + 4, &rel_script) || rel_script == 0) {
                 continue;
             }
-            const int script_off   = script_list_off + rel_script;
+            const int script_off = script_list_off + rel_script;
+            if (visited_scripts.contains(script_off)) {
+                continue;
+            }
+            visited_scripts.insert(script_off);
+
             quint16 def_lang_off   = 0;
             quint16 lang_sys_count = 0;
             if (!readU16(table, script_off, &def_lang_off)
@@ -440,8 +480,8 @@ void parseOtLayoutTable(FT_Face face,
                 continue;
             }
             if (def_lang_off != 0) {
-                collectLangSysFeatures(table, script_off + def_lang_off,
-                                       QByteArrayLiteral("dflt"), ref_langs);
+                record_lang(script_off + def_lang_off,
+                            QByteArrayLiteral("dflt"));
             }
             const int max_langs
                 = qMax(0, (table.size() - (script_off + 4)) / 6);
@@ -452,20 +492,17 @@ void parseOtLayoutTable(FT_Face face,
                 quint16 rel_lang = 0;
                 if (readAsciiTag(table, lrec, &ltag)
                     && readU16(table, lrec + 4, &rel_lang) && rel_lang != 0) {
-                    collectLangSysFeatures(table, script_off + rel_lang, ltag,
-                                           ref_langs);
+                    record_lang(script_off + rel_lang, ltag);
                 }
             }
         }
     }
 
-    quint16 feat_count = 0;
-    if (feature_list_off == 0
-        || !readU16(table, feature_list_off, &feat_count)) {
-        return;
+    for (auto it = lang_tags_by_off.constBegin();
+         it != lang_tags_by_off.constEnd(); ++it) {
+        collectLangSysFeatures(table, it.key(), it.value(), fcount, ref_langs);
     }
-    const int max_feats = qMax(0, (table.size() - (feature_list_off + 2)) / 6);
-    const int fcount    = qMin<int>(feat_count, max_feats);
+
     for (int f = 0; f < fcount; ++f) {
         const quint16 idx = quint16(f);
         auto ref_it       = ref_langs.constFind(idx);
@@ -717,7 +754,7 @@ void FontInspectorEngine::populateFace(FaceEntry &entry)
                 const FT_Var_Axis &ax = mm_var->axis[i];
                 FontVariableAxisInfo info;
                 info.tag = tagToBytes(ax.tag);
-                if (ax.strid > 0 && ax.strid != 0xFFFF) {
+                if (ax.strid > 0 && ax.strid < 0xFFFF) {
                     info.name = names.value(quint16(ax.strid));
                 }
                 if (info.name.isEmpty()) {
@@ -738,7 +775,7 @@ void FontInspectorEngine::populateFace(FaceEntry &entry)
             entry.instance_aliases.reserve(int(mm_var->num_namedstyles));
             for (FT_UInt j = 0; j < mm_var->num_namedstyles; ++j) {
                 const FT_Var_Named_Style &ns = mm_var->namedstyle[j];
-                if (!ns.coords || ns.strid == 0 || ns.strid == 0xFFFF) {
+                if (!ns.coords || ns.strid == 0 || ns.strid >= 0xFFFF) {
                     continue;
                 }
                 const quint16 sid      = quint16(ns.strid);

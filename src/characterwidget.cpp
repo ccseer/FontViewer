@@ -111,7 +111,14 @@ QSize CharacterWidget::sizeHint() const
 
 ushort CharacterWidget::getCharIndexAtPos(const QPoint &pt)
 {
-    uint index = (pt.y() / m_sz_square) * m_columns + pt.x() / m_sz_square;
+    if (m_sz_square <= 0 || pt.x() < 0 || pt.y() < 0) {
+        return 0;
+    }
+    const int col = pt.x() / m_sz_square;
+    if (col >= m_columns) {
+        return 0;
+    }
+    const uint index = uint(pt.y() / m_sz_square) * m_columns + uint(col);
     if (index < getCharCount()) {
         return m_char_indexes[index];
     }
@@ -155,7 +162,7 @@ void CharacterWidget::mouseDoubleClickEvent(QMouseEvent *event)
 
 void CharacterWidget::paintEvent(QPaintEvent *event)
 {
-    if (m_char_indexes.empty()) {
+    if (m_char_indexes.empty() || m_sz_square <= 0) {
         return;
     }
     QPainter painter(this);
@@ -164,12 +171,17 @@ void CharacterWidget::paintEvent(QPaintEvent *event)
     painter.setFont(m_ft);
 
     const QRect rt_redraw = event->rect();
+    const int row_begin   = qMax(0, rt_redraw.top() / m_sz_square);
     const int row_end     = rt_redraw.bottom() / m_sz_square;
-    const int col_begin   = rt_redraw.left() / m_sz_square;
-    const int col_end     = rt_redraw.right() / m_sz_square;
+    const int col_begin   = qMax(0, rt_redraw.left() / m_sz_square);
+    const int col_end     = qMin(int(m_columns) - 1,
+                                 rt_redraw.right() / m_sz_square);
+    if (col_begin > col_end) {
+        return;
+    }
     const ushort char_t   = getCharCount();
-    const QFontMetrics fm(m_ft);
-    for (int row = rt_redraw.top() / m_sz_square; row <= row_end; ++row) {
+    const QFontMetrics fm(m_ft, this);
+    for (int row = row_begin; row <= row_end; ++row) {
         const int first_index_row = row * m_columns;
         const int y               = row * m_sz_square;
         for (int col = col_begin; col <= col_end; ++col) {

@@ -259,9 +259,10 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         QVector<quint32> indexes = display_raw.glyphIndexesForString(str);
         if (!indexes.isEmpty()) {
             quint32 index = indexes[0];
-            glyph_box     = display_raw.boundingRect(index);
-            display_advance
-                = display_raw.advancesForGlyphIndexes({index}).at(0).x();
+            const QVector<QPointF> advances
+                = display_raw.advancesForGlyphIndexes({index});
+            glyph_box       = display_raw.boundingRect(index);
+            display_advance = advances.isEmpty() ? 0.0 : advances.at(0).x();
             display_ascent  = display_raw.ascent();
             display_descent = display_raw.descent();
             use_strict      = true;
@@ -458,9 +459,12 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         painter.setPen(handle_pen);
         int contour_start = 0;
         for (int contour_end : m_outline.contour_ends) {
+            if (contour_start < 0 || contour_end < contour_start
+                || contour_end >= screen_pts.size()) {
+                continue;
+            }
             const int count = contour_end - contour_start + 1;
-            if (contour_start >= 0 && count >= 2
-                && contour_end < screen_pts.size()) {
+            if (count >= 2) {
                 for (int i = contour_start; i <= contour_end; ++i) {
                     const int next
                         = (i == contour_end) ? contour_start : (i + 1);
@@ -472,9 +476,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
                     }
                 }
             }
-            if (contour_end >= contour_start) {
-                contour_start = contour_end + 1;
-            }
+            contour_start = contour_end + 1;
         }
 
         const QColor base_col = pal.base().color();
@@ -838,6 +840,7 @@ void GlyphInspectorWidget::updateMetrics()
     QVector<quint32> glyph_indexes = raw_font.glyphIndexesForString(str);
     if (glyph_indexes.isEmpty()) {
         qprintt << "No glyph index for character" << m_char;
+        m_metrics = {};
         return;
     }
 

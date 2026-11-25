@@ -11,6 +11,7 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QFrame>
@@ -41,6 +42,8 @@
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QtNumeric>
+
+#include <limits>
 
 #include "characterwidget.h"
 #include "fontinspectorengine.h"
@@ -225,6 +228,11 @@ private slots:
     void openTypePillsIsolationSpacingResetAndNonPersistence();
     void glyphOutlineExtractionMatchesQtAndVariableAxes();
     void glyphInspectorShowOutlinePointsUiAndIniPersistence();
+    void characterWidgetHandlesUninitializedFontSafely();
+    void characterWidgetLargePointSizeDoesNotOverflowSquareSize();
+    void openTypeFeatureParserDeduplicatesRepeatedScriptAndLangTables();
+    void inspectorEngineClampsExtremeVarAxisFixedConversion();
+    void glyphPreviewHandlesExtremeContourEndWithoutOverflow();
 };
 
 void ViewerTest::escReleaseRunsAfterTheEventLoop()
@@ -1538,12 +1546,14 @@ void ViewerTest::variableAxisDragDefersHiddenCharactersRebuild()
     QCOMPARE(tabs->currentIndex(), 0);
     QVERIFY(!char_wgt->isVisible());
 
-    // Glyph role on CharacterWidget never inherits letter spacing.
+    // Glyph role on CharacterWidget is initialized without letter spacing.
+    QCOMPARE(char_wgt->currentFont().family(), edit->font().family());
     QVERIFY(qFuzzyIsNull(char_wgt->currentFont().letterSpacing()));
     QVERIFY(!qFuzzyIsNull(edit->font().letterSpacing()));
 
     const float initial_char_wght
         = char_wgt->currentFont().variableAxisValue("wght");
+    QVERIFY(initial_char_wght > 0.0f);
 
     QSlider *wght_slider = nullptr;
     for (QSlider *s : view.findChildren<QSlider *>()) {
@@ -2221,17 +2231,32 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         const auto qt_tag = QFont::Tag::fromString(toggle_tag);
         QVERIFY(qt_tag.has_value());
 
-        auto *edit = view->findChild<FontPreviewEdit *>();
+        auto *edit     = view->findChild<FontPreviewEdit *>();
         auto *char_wgt = view->findChild<CharacterWidget *>();
+        auto *gi       = view->findChild<GlyphInspectorWidget *>();
+        auto *tabs     = view->findChild<QTabWidget *>();
         QVERIFY(edit != nullptr);
         QVERIFY(char_wgt != nullptr);
+        QVERIFY(gi != nullptr);
+        QVERIFY(tabs != nullptr);
         QVERIFY(edit->font().isFeatureSet(*qt_tag));
         QCOMPARE(edit->font().featureValue(*qt_tag),
                  quint32(!initial_on ? 1 : 0));
 
         // Character grid & Glyph Inspector share PreviewFontRole::Glyph and must
         // stay untouched by OpenType feature toggles.
+        QCOMPARE(char_wgt->currentFont().family(), edit->font().family());
         QVERIFY(char_wgt->currentFont().featureTags().isEmpty());
+        tabs->setCurrentIndex(2);
+        QApplication::processEvents();
+        emit char_wgt->selectionChanged(QChar('A'));
+        QApplication::processEvents();
+        tabs->setCurrentIndex(3);
+        QApplication::processEvents();
+        QCOMPARE(gi->currentFont().family(), edit->font().family());
+        QVERIFY(gi->currentFont().featureTags().isEmpty());
+        tabs->setCurrentIndex(0);
+        QApplication::processEvents();
 
         // Setting non-zero letter spacing must disable ligature pills (liga/clig/
         // dlig/hlig), suppress ligature overrides on the preview font so Qt
@@ -2453,16 +2478,7 @@ void ViewerTest::glyphOutlineExtractionMatchesQtAndVariableAxes()
     for (float wght : {400.0f, 750.0f}) {
         fw.setVariableAxisValue(QByteArrayLiteral("wght"), wght);
         if (wght == 400.0f) {
-            const FontDecorationMetrics deco = engine.decorationMetrics(
-                fw.currentFaceIndex(), fw.variableAxisValues());
-            const GlyphOutlineData outline = engine.glyphOutline(
-                fw.currentFaceIndex(), QChar('H'), fw.variableAxisValues());
-            QVERIFY(outline.valid);
-            gi->updateGlyph(QChar('H'), char_wgt->currentFont(), vf_path, deco,
-                            outline);
-        }
-        else {
-            QTest::qWait(40);
+            emit char_wgt->selectionChanged(QChar('H'));
         }
         QApplication::processEvents();
         const QFont glyph_font = gi->currentFont();
@@ -2636,6 +2652,275 @@ void ViewerTest::glyphInspectorShowOutlinePointsUiAndIniPersistence()
         QVERIFY(view2 != nullptr);
         QVERIFY(view2->isShowOutlinePoints());
     }
+}
+
+void ViewerTest::characterWidgetHandlesUninitializedFontSafely()
+{
+    const QString font_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!font_path.isEmpty());
+
+    CharacterWidget cw;
+    cw.init(font_path);
+    cw.resize(256, 256);
+    cw.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&cw));
+    const QWidget &cw_widget = cw;
+    QVERIFY(cw_widget.sizeHint().width() > 0);
+    QVERIFY(cw_widget.sizeHint().height() > 0);
+    cw.repaint();
+
+    const QPoint pt(8, 8);
+    QMouseEvent move(QEvent::MouseMove, pt, cw.mapToGlobal(pt), Qt::NoButton,
+                     Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&cw, &move);
+
+    QSignalSpy spy(&cw, &CharacterWidget::selectionChanged);
+    QMouseEvent press(QEvent::MouseButtonPress, pt, cw.mapToGlobal(pt),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&cw, &press);
+    QCOMPARE(spy.count(), 1);
+}
+
+void ViewerTest::characterWidgetLargePointSizeDoesNotOverflowSquareSize()
+{
+    const QString font_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!font_path.isEmpty());
+
+    CharacterWidget cw;
+    cw.init(font_path);
+    QFont large_ft(QStringLiteral("Roboto"));
+    large_ft.setPointSize(280);
+    cw.updateFont(large_ft);
+
+    const int expected_sq = qMax(16, 4 + QFontMetrics(large_ft, &cw).height());
+    QVERIFY(expected_sq > 255);
+
+    const QWidget &cw_widget = cw;
+    QCOMPARE(cw_widget.sizeHint().width(), 16 * expected_sq);
+
+    // Resizing wider than 16 columns must neither draw ghost columns past col 15
+    // nor select characters outside the 16-column grid.
+    cw.resize(16 * expected_sq + 64, expected_sq);
+    cw.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&cw));
+    const QImage rendered = cw.grab().toImage();
+    const QColor base_col = cw.palette().base().color();
+    for (int y = 0; y < rendered.height(); ++y) {
+        for (int x = 16 * expected_sq + 1; x < rendered.width(); ++x) {
+            QCOMPARE(rendered.pixelColor(x, y), base_col);
+        }
+    }
+
+    QSignalSpy spy(&cw, &CharacterWidget::selectionChanged);
+    const QPoint out_pt(16 * expected_sq + 8, 8);
+    QMouseEvent press(QEvent::MouseButtonPress, out_pt, cw.mapToGlobal(out_pt),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&cw, &press);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.at(0).at(0).toChar().isNull());
+}
+
+void ViewerTest::openTypeFeatureParserDeduplicatesRepeatedScriptAndLangTables()
+{
+    const QString base_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!base_path.isEmpty());
+    QFile f(base_path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QByteArray base_bytes = f.readAll();
+
+    // Build a GSUB table with 250 ScriptRecords pointing to one Script table
+    // with 250 LangSysRecords pointing to one LangSys table with 250 indices.
+    // Without deduplication this forces 250^3 (~15.6M) QHash lookups.
+    constexpr int kRepeat = 250;
+    QByteArray lang_sys;
+    appendU16(lang_sys, 0);       // lookupOrderOffset
+    appendU16(lang_sys, 0xFFFF);  // requiredFeatureIndex
+    appendU16(lang_sys, kRepeat);
+    for (int i = 0; i < kRepeat; ++i) {
+        appendU16(lang_sys, quint16(i % 2));
+    }
+
+    QByteArray script_tbl;
+    const quint16 shared_lang_off = quint16(4 + kRepeat * 6);
+    appendU16(script_tbl, shared_lang_off);
+    appendU16(script_tbl, kRepeat);
+    for (int i = 0; i < kRepeat; ++i) {
+        script_tbl.append("ZHS ", 4);
+        appendU16(script_tbl, shared_lang_off);
+    }
+    script_tbl.append(lang_sys);
+
+    QByteArray script_list;
+    const quint16 shared_script_off = quint16(2 + kRepeat * 6);
+    appendU16(script_list, kRepeat);
+    for (int i = 0; i < kRepeat; ++i) {
+        script_list.append("latn", 4);
+        appendU16(script_list, shared_script_off);
+    }
+    script_list.append(script_tbl);
+
+    QByteArray feature_list;
+    const quint16 feat_off = quint16(2 + 2 * 6);
+    appendU16(feature_list, 2);
+    feature_list.append("liga", 4);
+    appendU16(feature_list, feat_off);
+    feature_list.append("locl", 4);
+    appendU16(feature_list, quint16(feat_off + 4));
+    appendU16(feature_list, 0);
+    appendU16(feature_list, 0);
+    appendU16(feature_list, 0);
+    appendU16(feature_list, 0);
+
+    QByteArray lookup_list;
+    appendU16(lookup_list, 0);
+
+    const quint16 script_list_off  = 10;
+    const quint16 feature_list_off = quint16(script_list_off + script_list.size());
+    const quint16 lookup_list_off
+        = quint16(feature_list_off + feature_list.size());
+
+    QByteArray gsub;
+    appendU16(gsub, 1);
+    appendU16(gsub, 0);
+    appendU16(gsub, script_list_off);
+    appendU16(gsub, feature_list_off);
+    appendU16(gsub, lookup_list_off);
+    gsub.append(script_list);
+    gsub.append(feature_list);
+    gsub.append(lookup_list);
+
+    const QByteArray synth_ttf
+        = buildSyntheticSfntWithTables(base_bytes, {{"GSUB", gsub}});
+    QVERIFY(!synth_ttf.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString synth_path = dir.filePath(QStringLiteral("dup_ot.ttf"));
+    QFile out_file(synth_path);
+    QVERIFY(out_file.open(QIODevice::WriteOnly));
+    QCOMPARE(out_file.write(synth_ttf), qint64(synth_ttf.size()));
+    out_file.close();
+
+    QElapsedTimer timer;
+    timer.start();
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(synth_path));
+    const qint64 elapsed_ms = timer.elapsed();
+
+    const FontInspectionData &info = engine.inspectFace(0);
+    QVERIFY(info.locl_languages.contains(QStringLiteral("ZHS")));
+    bool has_liga = false;
+    for (const FontFeatureInfo &feat : info.ot_features) {
+        if (feat.tag == QByteArrayLiteral("liga")) {
+            has_liga = true;
+            break;
+        }
+    }
+    QVERIFY(has_liga);
+    QVERIFY2(elapsed_ms < 250,
+             qPrintable(QString("parse took %1 ms").arg(elapsed_ms)));
+}
+
+void ViewerTest::inspectorEngineClampsExtremeVarAxisFixedConversion()
+{
+    const QString vf_path = fixturePath("NotoSans-VariableFont_wdth,wght.ttf");
+    QVERIFY(!vf_path.isEmpty());
+    QFile f(vf_path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QByteArray base_bytes = f.readAll();
+
+    // Locate the fvar table and raise wght maxValue to 0x7FFFFFFF so
+    // fixedToFloat() rounds up to 32768.0f and tests floatToFixed() clamping.
+    const quint16 num_tables = readU16Be(base_bytes, 4);
+    QByteArray fvar_bytes;
+    for (int i = 0; i < num_tables; ++i) {
+        const int rec = 12 + i * 16;
+        if (base_bytes.mid(rec, 4) == QByteArrayLiteral("fvar")) {
+            const quint32 off = readU32Be(base_bytes, rec + 8);
+            const quint32 len = readU32Be(base_bytes, rec + 12);
+            fvar_bytes        = base_bytes.mid(int(off), int(len));
+            break;
+        }
+    }
+    QVERIFY(fvar_bytes.size() >= 16);
+    const quint16 axes_off   = readU16Be(fvar_bytes, 4);
+    const quint16 axis_count = readU16Be(fvar_bytes, 8);
+    const quint16 axis_size  = readU16Be(fvar_bytes, 10);
+    bool patched_wght        = false;
+    for (int a = 0; a < axis_count; ++a) {
+        const int off = axes_off + a * axis_size;
+        if (fvar_bytes.mid(off, 4) == QByteArrayLiteral("wght")) {
+            fvar_bytes[off + 12] = char(0x7F);
+            fvar_bytes[off + 13] = char(0xFF);
+            fvar_bytes[off + 14] = char(0xFF);
+            fvar_bytes[off + 15] = char(0xFF);
+            patched_wght         = true;
+            break;
+        }
+    }
+    QVERIFY(patched_wght);
+
+    const QByteArray synth_vf
+        = buildSyntheticSfntWithTables(base_bytes, {{"fvar", fvar_bytes}});
+    QVERIFY(!synth_vf.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString synth_path = dir.filePath(QStringLiteral("max_fvar.ttf"));
+    QFile out_file(synth_path);
+    QVERIFY(out_file.open(QIODevice::WriteOnly));
+    QCOMPARE(out_file.write(synth_vf), qint64(synth_vf.size()));
+    out_file.close();
+
+    FontInspectorEngine ref_engine;
+    QVERIFY(ref_engine.openFile(vf_path));
+    const GlyphOutlineData min_outline
+        = ref_engine.glyphOutline(0, QChar('B'), {{"wght", 100.0f}});
+    const GlyphOutlineData max_outline
+        = ref_engine.glyphOutline(0, QChar('B'), {{"wght", 900.0f}});
+    QVERIFY(min_outline.valid && max_outline.valid);
+    QVERIFY(min_outline.points != max_outline.points);
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(synth_path));
+    const GlyphOutlineData clamped_outline
+        = engine.glyphOutline(0, QChar('B'), {{"wght", 40000.0f}});
+    QVERIFY(clamped_outline.valid);
+    QVERIFY(clamped_outline.points != min_outline.points);
+    QCOMPARE(clamped_outline.points, max_outline.points);
+}
+
+void ViewerTest::glyphPreviewHandlesExtremeContourEndWithoutOverflow()
+{
+    const QString font_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!font_path.isEmpty());
+
+    FontWidget fw;
+    QVERIFY(fw.init(font_path));
+    auto *cw = fw.findChild<CharacterWidget *>();
+    QVERIFY(cw != nullptr);
+
+    GlyphPreviewWidget preview;
+    preview.resize(260, 280);
+    preview.setShowOutlinePoints(true);
+
+    GlyphOutlineData malformed;
+    malformed.valid         = true;
+    malformed.contour_count = 1;
+    malformed.point_count   = 2;
+    malformed.points        = {QPointF(0.0, 0.0), QPointF(100.0, 100.0)};
+    malformed.tags
+        = {GlyphOutlineData::OnCurve, GlyphOutlineData::OnCurve};
+    malformed.contour_ends = {std::numeric_limits<int>::max()};
+
+    FontDecorationMetrics deco;
+    deco.units_per_em = 1000;
+    preview.setGlyphData(QChar('A'), cw->currentFont(), QRectF(0, 0, 10, 10),
+                         10.0, deco, malformed);
+    preview.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&preview));
+    preview.repaint();
+    QCOMPARE(preview.lastOutlineScreenPoints().size(), 2);
 }
 
 QTEST_MAIN(ViewerTest)
