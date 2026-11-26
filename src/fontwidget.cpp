@@ -752,6 +752,7 @@ void FontWidget::initUI(const QStringList &names_raw)
             &FontWidget::onTabChanged);
 
     // Move tabWidget below variable-axes and OpenType feature bars.
+    ui->gridLayout->removeWidget(ui->tabWidget);
     ui->gridLayout->addWidget(ui->tabWidget, 3, 0);
     initAxesBar();
     initFeaturesBar();

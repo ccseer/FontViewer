@@ -151,6 +151,7 @@ QHash<quint16, QString> collectSfntNames(
         QString value;
     };
     QHash<quint16, Best> best;
+    QHash<quint16, QSet<QString>> seen_aliases;
     const FT_UInt count = FT_Get_Sfnt_Name_Count(face);
     for (FT_UInt i = 0; i < count; ++i) {
         FT_SfntName sfnt{};
@@ -166,9 +167,11 @@ QHash<quint16, QString> collectSfntNames(
             continue;
         }
         if (aliases_out) {
-            QStringList &list = (*aliases_out)[sfnt.name_id];
-            if (!list.contains(val, Qt::CaseInsensitive)) {
-                list.append(val);
+            const QString key  = val.toCaseFolded();
+            QSet<QString> &seen = seen_aliases[sfnt.name_id];
+            if (!seen.contains(key)) {
+                seen.insert(key);
+                (*aliases_out)[sfnt.name_id].append(val);
             }
         }
         auto it = best.find(sfnt.name_id);
@@ -369,8 +372,12 @@ bool isDefaultOnFeature(const QByteArray &tag)
 void collectLangSysFeatures(const QByteArray &table,
                             int lang_off,
                             const QStringList &langs,
-                            int feature_count,
-                            QHash<quint16, QStringList> &ref_langs)
+                            bool is_gsub,
+                            const QVector<bool> &is_locl,
+                            QVector<bool> &referenced,
+                            QSet<QString> &seen_locl,
+                            QStringList &locl_langs_out,
+                            int &budget)
 {
     quint16 req_idx    = 0xFFFF;
     quint16 feat_count = 0;
@@ -378,28 +385,32 @@ void collectLangSysFeatures(const QByteArray &table,
         || !readU16(table, lang_off + 4, &feat_count)) {
         return;
     }
-    QSet<quint16> seen_indices;
-    auto add_langs = [&](quint16 idx) {
-        if (int(idx) >= feature_count || seen_indices.contains(idx)) {
+    const int fcount = referenced.size();
+    bool locl_added  = false;
+    auto mark_index  = [&](quint16 idx) {
+        if (int(idx) >= fcount) {
             return;
         }
-        seen_indices.insert(idx);
-        QStringList &dst = ref_langs[idx];
-        for (const QString &l : langs) {
-            if (!dst.contains(l)) {
-                dst.append(l);
+        referenced[idx] = true;
+        if (is_gsub && is_locl[idx] && !locl_added) {
+            locl_added = true;
+            for (const QString &l : langs) {
+                if (l != QLatin1String("dflt") && !seen_locl.contains(l)) {
+                    seen_locl.insert(l);
+                    locl_langs_out.append(l);
+                }
             }
         }
     };
     if (req_idx != 0xFFFF) {
-        add_langs(req_idx);
+        mark_index(req_idx);
     }
     const int max_count = qMax(0, (table.size() - (lang_off + 6)) / 2);
     const int count     = qMin<int>(feat_count, max_count);
-    for (int i = 0; i < count; ++i) {
+    for (int i = 0; i < count && budget > 0; ++i, --budget) {
         quint16 idx = 0;
         if (readU16(table, lang_off + 6 + i * 2, &idx)) {
-            add_langs(idx);
+            mark_index(idx);
         }
     }
 }
@@ -409,6 +420,7 @@ void parseOtLayoutTable(FT_Face face,
                         bool is_gsub,
                         const QHash<quint16, QString> &names,
                         QHash<QByteArray, QString> &features_out,
+                        QSet<QString> &seen_locl,
                         QStringList &locl_langs_out)
 {
     FT_ULong len = 0;
@@ -441,28 +453,42 @@ void parseOtLayoutTable(FT_Face face,
     const int max_feats = qMax(0, (table.size() - (feature_list_off + 2)) / 6);
     const int fcount    = qMin<int>(feat_count, max_feats);
 
+    QVector<bool> is_locl(fcount, false);
+    for (int f = 0; f < fcount; ++f) {
+        QByteArray ftag;
+        if (readAsciiTag(table, feature_list_off + 2 + f * 6, &ftag)
+            && ftag == QByteArrayLiteral("locl")) {
+            is_locl[f] = true;
+        }
+    }
+
     // Collect only FeatureIndex entries referenced by at least one Script/LangSys.
-    // Deduplicate Script and LangSys offsets so crafted tables cannot amplify
-    // parsing into cubic/quadratic traversal work.
-    QHash<quint16, QStringList> ref_langs;
+    // Deduplicate exact offsets and bound total record scans linearly in table
+    // size so staggered overlapping tables cannot amplify into quadratic work.
+    QVector<bool> referenced(fcount, false);
     QHash<int, QStringList> lang_tags_by_off;
-    auto record_lang = [&lang_tags_by_off](int lang_off,
-                                           const QByteArray &lang_tag) {
-        QStringList &tags      = lang_tags_by_off[lang_off];
+    QHash<int, QSet<QString>> seen_lang_tags;
+    auto record_lang = [&](int lang_off, const QByteArray &lang_tag) {
         const QString lang_str = QString::fromLatin1(lang_tag).trimmed();
-        if (!lang_str.isEmpty() && !tags.contains(lang_str)) {
-            tags.append(lang_str);
+        if (lang_str.isEmpty()) {
+            return;
+        }
+        QSet<QString> &seen = seen_lang_tags[lang_off];
+        if (!seen.contains(lang_str)) {
+            seen.insert(lang_str);
+            lang_tags_by_off[lang_off].append(lang_str);
         }
     };
 
+    int lang_rec_budget  = qMax(65536, table.size());
     quint16 script_count = 0;
     if (script_list_off > 0 && readU16(table, script_list_off, &script_count)) {
         QSet<int> visited_scripts;
         const int max_scripts
             = qMax(0, (table.size() - (script_list_off + 2)) / 6);
         const int count = qMin<int>(script_count, max_scripts);
-        for (int s = 0; s < count; ++s) {
-            const int rec_off = script_list_off + 2 + s * 6;
+        for (int s = 0; s < count && lang_rec_budget > 0; ++s) {
+            const int rec_off  = script_list_off + 2 + s * 6;
             quint16 rel_script = 0;
             if (!readU16(table, rec_off + 4, &rel_script) || rel_script == 0) {
                 continue;
@@ -486,7 +512,8 @@ void parseOtLayoutTable(FT_Face face,
             const int max_langs
                 = qMax(0, (table.size() - (script_off + 4)) / 6);
             const int lcount = qMin<int>(lang_sys_count, max_langs);
-            for (int l = 0; l < lcount; ++l) {
+            for (int l = 0; l < lcount && lang_rec_budget > 0;
+                 ++l, --lang_rec_budget) {
                 const int lrec = script_off + 4 + l * 6;
                 QByteArray ltag;
                 quint16 rel_lang = 0;
@@ -498,15 +525,16 @@ void parseOtLayoutTable(FT_Face face,
         }
     }
 
+    int feat_ref_budget = qMax(65536, table.size());
     for (auto it = lang_tags_by_off.constBegin();
-         it != lang_tags_by_off.constEnd(); ++it) {
-        collectLangSysFeatures(table, it.key(), it.value(), fcount, ref_langs);
+         it != lang_tags_by_off.constEnd() && feat_ref_budget > 0; ++it) {
+        collectLangSysFeatures(table, it.key(), it.value(), is_gsub, is_locl,
+                               referenced, seen_locl, locl_langs_out,
+                               feat_ref_budget);
     }
 
     for (int f = 0; f < fcount; ++f) {
-        const quint16 idx = quint16(f);
-        auto ref_it       = ref_langs.constFind(idx);
-        if (ref_it == ref_langs.constEnd()) {
+        if (!referenced[f] || is_locl[f]) {
             continue;
         }
         const int rec_off = feature_list_off + 2 + f * 6;
@@ -514,18 +542,6 @@ void parseOtLayoutTable(FT_Face face,
         quint16 rel_feat = 0;
         if (!readAsciiTag(table, rec_off, &ftag)
             || !readU16(table, rec_off + 4, &rel_feat) || rel_feat == 0) {
-            continue;
-        }
-
-        if (ftag == QByteArrayLiteral("locl")) {
-            if (is_gsub) {
-                for (const QString &l : ref_it.value()) {
-                    if (l != QLatin1String("dflt")
-                        && !locl_langs_out.contains(l)) {
-                        locl_langs_out.append(l);
-                    }
-                }
-            }
             continue;
         }
 
@@ -562,10 +578,11 @@ void extractOtFeatures(FT_Face face,
                        QStringList &locl_langs_out)
 {
     QHash<QByteArray, QString> merged;
+    QSet<QString> seen_locl;
     parseOtLayoutTable(face, FT_MAKE_TAG('G', 'S', 'U', 'B'), true, names,
-                       merged, locl_langs_out);
+                       merged, seen_locl, locl_langs_out);
     parseOtLayoutTable(face, FT_MAKE_TAG('G', 'P', 'O', 'S'), false, names,
-                       merged, locl_langs_out);
+                       merged, seen_locl, locl_langs_out);
 
     features_out.reserve(merged.size());
     for (auto it = merged.constBegin(); it != merged.constEnd(); ++it) {
@@ -715,23 +732,31 @@ void FontInspectorEngine::populateFace(FaceEntry &entry)
     entry.typographic_family    = names.value(16);
     entry.typographic_subfamily = names.value(17);
 
-    auto append_alias = [](QStringList &dst, const QString &val) {
-        if (!val.isEmpty() && !dst.contains(val, Qt::CaseInsensitive)) {
-            dst.append(val);
-        }
-    };
-    append_alias(entry.family_aliases, entry.family_name);
-    append_alias(entry.family_aliases, entry.typographic_family);
+    auto append_alias
+        = [](QStringList &dst, QSet<QString> &seen, const QString &val) {
+              if (val.isEmpty()) {
+                  return;
+              }
+              const QString key = val.toCaseFolded();
+              if (!seen.contains(key)) {
+                  seen.insert(key);
+                  dst.append(val);
+              }
+          };
+    QSet<QString> seen_family;
+    append_alias(entry.family_aliases, seen_family, entry.family_name);
+    append_alias(entry.family_aliases, seen_family, entry.typographic_family);
     for (quint16 id : {quint16(1), quint16(16), quint16(21)}) {
         for (const QString &alias : name_aliases.value(id)) {
-            append_alias(entry.family_aliases, alias);
+            append_alias(entry.family_aliases, seen_family, alias);
         }
     }
-    append_alias(entry.style_aliases, entry.style_name);
-    append_alias(entry.style_aliases, entry.typographic_subfamily);
+    QSet<QString> seen_style;
+    append_alias(entry.style_aliases, seen_style, entry.style_name);
+    append_alias(entry.style_aliases, seen_style, entry.typographic_subfamily);
     for (quint16 id : {quint16(2), quint16(17), quint16(22)}) {
         for (const QString &alias : name_aliases.value(id)) {
-            append_alias(entry.style_aliases, alias);
+            append_alias(entry.style_aliases, seen_style, alias);
         }
     }
 

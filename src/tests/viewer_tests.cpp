@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFrame>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QImage>
@@ -231,8 +232,12 @@ private slots:
     void characterWidgetHandlesUninitializedFontSafely();
     void characterWidgetLargePointSizeDoesNotOverflowSquareSize();
     void openTypeFeatureParserDeduplicatesRepeatedScriptAndLangTables();
+    void openTypeFeatureParserBoundsOverlappingScriptAndLangTables();
+    void inspectorEngineHandlesLargeNameAliasTableWithoutQuadraticScan();
     void inspectorEngineClampsExtremeVarAxisFixedConversion();
     void glyphPreviewHandlesExtremeContourEndWithoutOverflow();
+    void glyphPreviewSkipsChordBetweenAdjacentOffCubicHandles();
+    void tabWidgetHasSingleGridEntryAndNoBlankGapOnStaticFont();
 };
 
 void ViewerTest::escReleaseRunsAfterTheEventLoop()
@@ -2921,6 +2926,253 @@ void ViewerTest::glyphPreviewHandlesExtremeContourEndWithoutOverflow()
     QVERIFY(QTest::qWaitForWindowExposed(&preview));
     preview.repaint();
     QCOMPARE(preview.lastOutlineScreenPoints().size(), 2);
+}
+
+void ViewerTest::openTypeFeatureParserBoundsOverlappingScriptAndLangTables()
+{
+    const QString base_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!base_path.isEmpty());
+    QFile f(base_path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QByteArray base_bytes = f.readAll();
+
+    // Craft 1,500 staggered Script offsets (every 2 bytes) pointing into an
+    // ASCII-encoded overlapping pool with 2,304 distinct relLang offsets so
+    // exact-offset deduplication misses staggered Script and LangSys tables.
+    constexpr int kStagger  = 1500;
+    constexpr int kNumFeats = 3000;
+    QByteArray feature_list;
+    const quint16 feat_off = quint16(2 + kNumFeats * 6);
+    appendU16(feature_list, kNumFeats);
+    for (int i = 0; i < kNumFeats; ++i) {
+        feature_list.append(i == 2827 ? "liga" : "smcp", 4);
+        appendU16(feature_list, feat_off);
+    }
+    appendU16(feature_list, 0);
+    appendU16(feature_list, 0);
+
+    constexpr quint16 kScriptListOff  = 10;
+    constexpr quint16 kFeatureListOff = kScriptListOff + 2 + kStagger * 6;
+    const quint16 kLookupListOff      = quint16(kFeatureListOff + feature_list.size());
+    const int kPoolStart              = kLookupListOff + 2;
+
+    QByteArray script_list;
+    appendU16(script_list, kStagger);
+    for (int s = 0; s < kStagger; ++s) {
+        script_list.append("latn", 4);
+        appendU16(script_list, quint16((kPoolStart - kScriptListOff) + s * 2));
+    }
+
+    // Pool layout: [0..10000) holds ASCII words 0x3030..0x5F5F (values
+    // 12336..24415) so every 4-byte tag is printable ASCII and every
+    // langSysCount/relLang produces distinct LangSys offsets in [39356, 54435);
+    // [10000..38000) holds 0x0B0B (2827) so every staggered LangSys reads
+    // featCount = 2827 and valid featureIndex = 2827 ("liga").
+    constexpr int kLangRel = 10000;
+    QByteArray pool(38000, '\0');
+    for (int i = 0; i < kLangRel; i += 2) {
+        const int idx = i / 2;
+        pool[i]       = char(0x30 + (idx / 48) % 48);
+        pool[i + 1]   = char(0x30 + idx % 48);
+    }
+    for (int i = kLangRel; i + 1 < pool.size(); i += 2) {
+        pool[i]     = char(0x0B);
+        pool[i + 1] = char(0x0B);
+    }
+
+    QByteArray gsub;
+    appendU16(gsub, 1);
+    appendU16(gsub, 0);
+    appendU16(gsub, kScriptListOff);
+    appendU16(gsub, kFeatureListOff);
+    appendU16(gsub, kLookupListOff);
+    gsub.append(script_list);
+    gsub.append(feature_list);
+    appendU16(gsub, 0);  // lookupCount = 0
+    gsub.append(pool);
+
+    const QByteArray synth_ttf
+        = buildSyntheticSfntWithTables(base_bytes, {{"GSUB", gsub}});
+    QVERIFY(!synth_ttf.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString synth_path = dir.filePath(QStringLiteral("stagger_ot.ttf"));
+    QFile out_file(synth_path);
+    QVERIFY(out_file.open(QIODevice::WriteOnly));
+    QCOMPARE(out_file.write(synth_ttf), qint64(synth_ttf.size()));
+    out_file.close();
+
+    QElapsedTimer timer;
+    timer.start();
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(synth_path));
+    const qint64 elapsed_ms = timer.elapsed();
+
+    QVERIFY(!engine.inspectFace(0).ot_features.isEmpty());
+    QVERIFY2(elapsed_ms < 250,
+             qPrintable(QString("staggered parse took %1 ms").arg(elapsed_ms)));
+}
+
+void ViewerTest::inspectorEngineHandlesLargeNameAliasTableWithoutQuadraticScan()
+{
+    const QString base_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!base_path.isEmpty());
+    QFile f(base_path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QByteArray base_bytes = f.readAll();
+
+    // Craft 5,000 unique Platform 3 / UTF-16BE records all sharing nameID = 1.
+    // O(N^2) QStringList::contains would perform ~12.5M case-insensitive checks.
+    constexpr int kCount = 5000;
+    QByteArray records;
+    QByteArray strings;
+    records.reserve(kCount * 12);
+    strings.reserve(kCount * 10);
+    for (int i = 0; i < kCount; ++i) {
+        const QByteArray utf16
+            = makeUtf16Be(QStringLiteral("F%1").arg(i, 4, 10, QChar('0')));
+        appendU16(records, 3);
+        appendU16(records, 1);
+        appendU16(records, 0x0409);
+        appendU16(records, 1);
+        appendU16(records, quint16(utf16.size()));
+        appendU16(records, quint16(strings.size()));
+        strings.append(utf16);
+    }
+
+    QByteArray name_tbl;
+    appendU16(name_tbl, 0);
+    appendU16(name_tbl, kCount);
+    appendU16(name_tbl, quint16(6 + records.size()));
+    name_tbl.append(records);
+    name_tbl.append(strings);
+
+    const QByteArray synth_ttf
+        = buildSyntheticSfntWithTables(base_bytes, {{"name", name_tbl}});
+    QVERIFY(!synth_ttf.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString synth_path = dir.filePath(QStringLiteral("many_names.ttf"));
+    QFile out_file(synth_path);
+    QVERIFY(out_file.open(QIODevice::WriteOnly));
+    QCOMPARE(out_file.write(synth_ttf), qint64(synth_ttf.size()));
+    out_file.close();
+
+    QElapsedTimer timer;
+    timer.start();
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(synth_path));
+    const qint64 elapsed_ms = timer.elapsed();
+
+    QCOMPARE(engine.resolveFaceIndex(QStringLiteral("f4999"), QString()), 0);
+    QVERIFY2(elapsed_ms < 250,
+             qPrintable(QString("name parse took %1 ms").arg(elapsed_ms)));
+}
+
+void ViewerTest::glyphPreviewSkipsChordBetweenAdjacentOffCubicHandles()
+{
+    const QString font_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!font_path.isEmpty());
+
+    FontWidget fw;
+    QVERIFY(fw.init(font_path));
+    auto *cw = fw.findChild<CharacterWidget *>();
+    QVERIFY(cw != nullptr);
+
+    GlyphPreviewWidget preview;
+    preview.resize(320, 320);
+    preview.setShowOutlinePoints(true);
+
+    // P0(OnCurve) -> P1(OffCubic) -> P2(OffCubic) -> P3(OnCurve) forming a wide
+    // horizontal bridge across y = 500 FUnits. Keep P0->P1 and P2->P3 away
+    // from the vertical origin/advance lines so only tangent handles paint
+    // handle orange at their midpoints, while the center (x = 350 FUnits)
+    // must NOT have a chord drawn between P1 and P2.
+    GlyphOutlineData cubic;
+    cubic.valid         = true;
+    cubic.contour_count = 1;
+    cubic.point_count   = 4;
+    cubic.points        = {
+        QPointF(150.0, 0.0),
+        QPointF(150.0, 500.0),
+        QPointF(550.0, 500.0),
+        QPointF(550.0, 0.0),
+    };
+    cubic.tags = {
+        GlyphOutlineData::OnCurve,
+        GlyphOutlineData::OffCubic,
+        GlyphOutlineData::OffCubic,
+        GlyphOutlineData::OnCurve,
+    };
+    cubic.contour_ends = {3};
+
+    FontDecorationMetrics deco;
+    deco.units_per_em = 1000;
+    preview.setGlyphData(QChar(' '), cw->currentFont(), QRectF(0, 0, 10, 10),
+                         10.0, deco, cubic);
+    preview.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&preview));
+    preview.repaint();
+
+    const QVector<QPointF> pts = preview.lastOutlineScreenPoints();
+    QCOMPARE(pts.size(), 4);
+
+    const QImage img = preview.grab().toImage();
+
+    auto hasHandleNear = [&img](const QPointF &pt) {
+        const int cx = qRound(pt.x());
+        const int cy = qRound(pt.y());
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                const int x = cx + dx;
+                const int y = cy + dy;
+                if (x < 0 || y < 0 || x >= img.width() || y >= img.height()) {
+                    continue;
+                }
+                const QColor c = img.pixelColor(x, y);
+                if (c.red() - c.blue() >= 40 && c.green() > c.blue()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    const QPointF p0_p1_mid = (pts[0] + pts[1]) * 0.5;
+    const QPointF p1_p2_mid = (pts[1] + pts[2]) * 0.5;
+    const QPointF p2_p3_mid = (pts[2] + pts[3]) * 0.5;
+    QVERIFY(hasHandleNear(p0_p1_mid));
+    QVERIFY(!hasHandleNear(p1_p2_mid));
+    QVERIFY(hasHandleNear(p2_p3_mid));
+}
+
+void ViewerTest::tabWidgetHasSingleGridEntryAndNoBlankGapOnStaticFont()
+{
+    const QString static_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!static_path.isEmpty());
+
+    FontWidget view;
+    QVERIFY(view.init(static_path));
+    view.resize(800, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    auto *grid = qobject_cast<QGridLayout *>(view.layout());
+    auto *tabs = view.findChild<QTabWidget *>();
+    QVERIFY(grid != nullptr);
+    QVERIFY(tabs != nullptr);
+
+    int tab_item_count = 0;
+    for (int i = 0; i < grid->count(); ++i) {
+        if (grid->itemAt(i)->widget() == tabs) {
+            ++tab_item_count;
+        }
+    }
+    QCOMPARE(tab_item_count, 1);
+    QVERIFY(tabs->height() > 350);
 }
 
 QTEST_MAIN(ViewerTest)

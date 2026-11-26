@@ -4,7 +4,7 @@ FontViewer is a fast, native font preview plugin for [Seer](https://1218.io) —
 
 ## Features
 
-- **Quick font preview** in Seer — press Space on any `.ttf`, `.otf`, `.woff`, `.woff2`, `.ttc`, or `.otc` file
+- **Quick font preview** in Seer — press Space on any `.ttf`, `.otf`, `.ttc`, or `.otc` file
 - **Glyph table** showing every Unicode codepoint the font covers
 - **Glyph Inspector** with per-glyph metrics: advance width, bounding box, left/right bearings, and a visual preview with annotated guide lines
 - **Sample text rendering** with editable pangram presets at any point size
@@ -56,7 +56,7 @@ Requirements: Qt 6.8, CMake 3.16+.
 
 FontViewer is a file preview plugin for [Seer](https://1218.io) — the original and fastest Quick Look tool for Windows.
 
-- Supports previewing `.ttf`, `.otf`, `.woff`, `.woff2`, and other font formats
+- Supports previewing `.ttf`, `.otf`, `.ttc`, and `.otc` font files
 - Displays full glyph table, metadata, and Unicode coverage
 - Renders sample text with the selected font at configurable sizes
 - Built as a native DLL plugin for Seer 4.0.0+

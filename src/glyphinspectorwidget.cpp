@@ -469,6 +469,12 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
                     const int next
                         = (i == contour_end) ? contour_start : (i + 1);
                     if (m_outline.tags[i]
+                            == GlyphOutlineData::PointKind::OffCubic
+                        && m_outline.tags[next]
+                               == GlyphOutlineData::PointKind::OffCubic) {
+                        continue;
+                    }
+                    if (m_outline.tags[i]
                             != GlyphOutlineData::PointKind::OnCurve
                         || m_outline.tags[next]
                                != GlyphOutlineData::PointKind::OnCurve) {
