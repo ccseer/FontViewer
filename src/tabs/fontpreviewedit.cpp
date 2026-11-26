@@ -5,20 +5,25 @@
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QPainter>
+#include <QScrollBar>
 #include <QTextBlock>
 #include <QTextBlockFormat>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QWheelEvent>
 
+#include "fontui.h"
+
 FontPreviewEdit::FontPreviewEdit(QWidget *parent) : QTextEdit(parent)
 {
     setAcceptRichText(false);
     setFrameShape(QFrame::NoFrame);
+    verticalScrollBar()->setProperty("is_readonly", true);
+    horizontalScrollBar()->setProperty("is_readonly", true);
     // Only a mouse click may move focus into the editor; the viewer keeps every
     // other control out of the focus chain so the host keeps Space / arrows.
     setFocusPolicy(Qt::ClickFocus);
-    document()->setDocumentMargin(10.0);
+    document()->setDocumentMargin(fontui::dpf(8.0, m_dpr));
 
     connect(this, &QTextEdit::textChanged, this, [this]() {
         if (m_setting_text || m_applying_format) {
@@ -26,6 +31,16 @@ FontPreviewEdit::FontPreviewEdit(QWidget *parent) : QTextEdit(parent)
         }
         emit sigUserEdited();
     });
+}
+
+void FontPreviewEdit::setDpr(qreal dpr)
+{
+    const qreal clamped = fontui::clampDpr(dpr);
+    if (qFuzzyCompare(m_dpr, clamped)) {
+        return;
+    }
+    m_dpr = clamped;
+    document()->setDocumentMargin(fontui::dpf(8.0, m_dpr));
 }
 
 void FontPreviewEdit::setPreviewText(const QString &text)
@@ -109,6 +124,12 @@ void FontPreviewEdit::insertFromMimeData(const QMimeData *source)
 
 bool FontPreviewEdit::event(QEvent *event)
 {
+    if (event->type() == QEvent::Paint) {
+        // PreviewSurfaceFrame paints the single rounded border; suppress
+        // QTextEdit's own PE_Frame pass so Seer Host's MaterialStyle does not
+        // draw an inner frame under the scrollbar.
+        return true;
+    }
     if (event->type() == QEvent::ShortcutOverride) {
         auto *ke = static_cast<QKeyEvent *>(event);
         if (ke->key() == Qt::Key_Escape
@@ -169,9 +190,7 @@ void FontPreviewEdit::wheelEvent(QWheelEvent *event)
 void FontPreviewEdit::focusInEvent(QFocusEvent *event)
 {
     QTextEdit::focusInEvent(event);
-    // The focus ring is painted by paintEvent, which Qt does not schedule on a
-    // focus change by itself.
-    viewport()->update();
+    emit sigFocusChanged(true);
 }
 
 void FontPreviewEdit::focusOutEvent(QFocusEvent *event)
@@ -180,30 +199,5 @@ void FontPreviewEdit::focusOutEvent(QFocusEvent *event)
     // window to cancel, so drop the flag instead of swallowing the next Esc.
     m_ime_composing = false;
     QTextEdit::focusOutEvent(event);
-    viewport()->update();
-}
-
-void FontPreviewEdit::paintEvent(QPaintEvent *event)
-{
-    QTextEdit::paintEvent(event);
-
-    if (!hasFocus()) {
-        return;
-    }
-
-    QPainter painter(viewport());
-    QColor accent = palette().color(QPalette::Highlight);
-    accent.setAlpha(140);
-    painter.setPen(QPen(accent, 1.0));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawRect(viewport()->rect().adjusted(0, 0, -1, -1));
-}
-
-void FontPreviewEdit::scrollContentsBy(int dx, int dy)
-{
-    QTextEdit::scrollContentsBy(dx, dy);
-    if (hasFocus() && (dx != 0 || dy != 0)) {
-        // viewport()->scroll() bit-blts the focus ring into the text area.
-        viewport()->update();
-    }
+    emit sigFocusChanged(false);
 }

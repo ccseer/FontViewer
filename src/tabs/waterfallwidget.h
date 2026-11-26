@@ -16,6 +16,7 @@ public:
 
     explicit WaterfallWidget(QWidget *parent = nullptr);
 
+    void setDpr(qreal dpr);
     void setFontProvider(FontProvider provider);
     void setSizes(const QVector<int> &sizes_pt);
     void setCurrentSize(int pt);
@@ -69,8 +70,9 @@ private:
     QVector<int> m_sizes;
     QVector<Row> m_rows;
     QString m_text;
-    int m_current       = 16;
-    bool m_inverted     = false;
-    qreal m_label_width = 60.0;
+    qreal m_dpr            = 1.0;
+    int m_current          = 16;
+    bool m_inverted        = false;
+    qreal m_label_width    = 60.0;
     qreal m_content_height = 0.0;
 };

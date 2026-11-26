@@ -469,6 +469,9 @@ void parseOtLayoutTable(FT_Face face,
     QHash<int, QStringList> lang_tags_by_off;
     QHash<int, QSet<QString>> seen_lang_tags;
     auto record_lang = [&](int lang_off, const QByteArray &lang_tag) {
+        if (lang_off < 0 || lang_off + 6 > table.size()) {
+            return;
+        }
         const QString lang_str = QString::fromLatin1(lang_tag).trimmed();
         if (lang_str.isEmpty()) {
             return;
@@ -498,6 +501,7 @@ void parseOtLayoutTable(FT_Face face,
                 continue;
             }
             visited_scripts.insert(script_off);
+            --lang_rec_budget;
 
             quint16 def_lang_off   = 0;
             quint16 lang_sys_count = 0;
@@ -505,7 +509,8 @@ void parseOtLayoutTable(FT_Face face,
                 || !readU16(table, script_off + 2, &lang_sys_count)) {
                 continue;
             }
-            if (def_lang_off != 0) {
+            if (def_lang_off != 0 && lang_rec_budget > 0) {
+                --lang_rec_budget;
                 record_lang(script_off + def_lang_off,
                             QByteArrayLiteral("dflt"));
             }

@@ -18,6 +18,27 @@ FontViewer is a fast, native font preview plugin for [Seer](https://1218.io) —
 
 Seer is the **first** and **fastest** Quick Look tool on Windows — it brought instant file preview to the platform before anyone else. Press Space on any file and get an immediate preview with no startup delay. FontViewer brings that same speed to font files, making it the best way to browse and inspect fonts on Windows without launching a resource-heavy editor.
 
+### Configuration (`fontviewer.ini`)
+
+#### Custom Text Presets (`[Presets]`)
+
+The Text tab provides three built-in presets (`Pangram`, `Paragraph`, `Digits & Symbols`). You can append your own presets under `[Presets]` in `fontviewer.ini`:
+
+- On first launch with an empty `[Presets]` section, FontViewer seeds three example presets (`Albus_Dumbledore`, `Best_App`, and `BoJack`) in `fontviewer.ini`; you can edit, add, or replace them freely, and empty/whitespace-only entries are ignored in the dropdown.
+- Each non-empty key under `[Presets]` appears below a separator using its INI key name as the label (prefer `underscores` or single words without spaces so Qt `IniFormat` does not write `%20`). Keys longer than 20 characters are elided in the dropdown with the full name shown on hover, and custom preset names do not widen the dropdown.
+- Use `\n` (or `\r\n`) for line breaks. Unquoted commas are preserved, and preset content is capped at 10,000 characters.
+- Selecting a preset previews it without overwriting your saved `user_text` (`Last used`) entry.
+
+```ini
+[Presets]
+CJK=永和九年，岁在癸丑\n天地玄黄，宇宙洪荒
+UI_Copy=Save, Cancel, Reset
+```
+
+#### Shortcuts (`[Shortcuts]`)
+
+Customizable keyboard shortcuts are stored under `[Shortcuts]` in `fontviewer.ini` and seeded with defaults on first launch. Set any shortcut value to `none` to unbind it. Zoom shortcuts (`Ctrl+=` and `Ctrl+-`) are built-in and fixed.
+
 ## Screenshots
 
 ![](res/ScreenShot_2026-05-04_185905_462.png)

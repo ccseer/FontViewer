@@ -1,6 +1,7 @@
 #include "glyphinspectorwidget.h"
 
 #include <QCheckBox>
+#include <QEvent>
 #include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QFormLayout>
@@ -16,6 +17,8 @@
 #include <limits>
 #include <optional>
 
+#include "fontui.h"
+
 #define qprintt qDebug() << "[GlyphInspector]"
 
 namespace {
@@ -28,7 +31,8 @@ qreal rectOverlapArea(const QRectF &a, const QRectF &b)
 QRectF placeNonOverlappingLabel(const QRectF &preferred,
                                 const QRectF &bounds,
                                 qreal step_y,
-                                const QVector<QRectF> &occupied)
+                                const QVector<QRectF> &occupied,
+                                bool prefer_horizontal = false)
 {
     auto clamp_rect = [&bounds](QRectF r) {
         if (r.left() < bounds.left()) {
@@ -58,6 +62,55 @@ QRectF placeNonOverlappingLabel(const QRectF &preferred,
     const QRectF candidate = clamp_rect(preferred);
     if (!overlaps(candidate)) {
         return candidate;
+    }
+
+    QVector<qreal> x_candidates;
+    auto push_x = [&](qreal x) {
+        const qreal max_x
+            = qMax(bounds.left(), bounds.right() - candidate.width());
+        const qreal cx = qBound(bounds.left(), x, max_x);
+        for (qreal seen : x_candidates) {
+            if (qAbs(seen - cx) < 1.0) {
+                return;
+            }
+        }
+        x_candidates.append(cx);
+    };
+    push_x(candidate.left());
+    for (const QRectF &occ : occupied) {
+        if (prefer_horizontal
+            && occ.intersects(QRectF(bounds.left(), candidate.top(),
+                                     bounds.width(), candidate.height()))) {
+            push_x(occ.left() - candidate.width() - 4.0);
+            push_x(occ.right() + 4.0);
+        }
+    }
+    for (const QRectF &occ : occupied) {
+        if (occ.intersects(QRectF(candidate.left(), bounds.top(),
+                                  candidate.width(), bounds.height()))) {
+            push_x(occ.left() - candidate.width() - 4.0);
+            push_x(occ.right() + 4.0);
+        }
+    }
+    for (int col = 1; col <= 4; ++col) {
+        const qreal dx = qMax(24.0, candidate.width() + 6.0) * col;
+        push_x(candidate.left() - dx);
+        push_x(candidate.left() + dx);
+    }
+    push_x(bounds.left());
+    push_x(bounds.right() - candidate.width());
+
+    // Horizontal metric labels (ascent, baseline, underline, etc.) should stagger
+    // horizontally along their own reference line before moving vertically so
+    // labels never cross onto the wrong side of an adjacent line.
+    if (prefer_horizontal) {
+        for (qreal x : x_candidates) {
+            QRectF probe = candidate;
+            probe.moveLeft(x);
+            if (!overlaps(probe)) {
+                return probe;
+            }
+        }
     }
 
     const qreal dir     = (step_y >= 0.0) ? 1.0 : -1.0;
@@ -90,34 +143,6 @@ QRectF placeNonOverlappingLabel(const QRectF &preferred,
     if (const auto r = try_vertical(candidate)) {
         return *r;
     }
-
-    QVector<qreal> x_candidates;
-    auto push_x = [&](qreal x) {
-        const qreal max_x
-            = qMax(bounds.left(), bounds.right() - candidate.width());
-        const qreal cx = qBound(bounds.left(), x, max_x);
-        for (qreal seen : x_candidates) {
-            if (qAbs(seen - cx) < 1.0) {
-                return;
-            }
-        }
-        x_candidates.append(cx);
-    };
-    push_x(candidate.left());
-    for (const QRectF &occ : occupied) {
-        if (occ.intersects(QRectF(candidate.left(), bounds.top(),
-                                  candidate.width(), bounds.height()))) {
-            push_x(occ.left() - candidate.width() - 4.0);
-            push_x(occ.right() + 4.0);
-        }
-    }
-    for (int col = 1; col <= 4; ++col) {
-        const qreal dx = qMax(24.0, candidate.width() + 6.0) * col;
-        push_x(candidate.left() - dx);
-        push_x(candidate.left() + dx);
-    }
-    push_x(bounds.left());
-    push_x(bounds.right() - candidate.width());
 
     for (qreal x : x_candidates) {
         QRectF probe = candidate;
@@ -161,8 +186,19 @@ void configureValueLabel(QLabel *label)
 // GlyphPreviewWidget implementation
 GlyphPreviewWidget::GlyphPreviewWidget(QWidget *parent) : QWidget(parent)
 {
-    setMinimumSize(260, 280);
+    setMinimumSize(fontui::dp(260, m_dpr), fontui::dp(280, m_dpr));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+}
+
+void GlyphPreviewWidget::setDpr(qreal dpr)
+{
+    const qreal clamped = fontui::clampDpr(dpr);
+    if (qFuzzyCompare(m_dpr, clamped)) {
+        return;
+    }
+    m_dpr = clamped;
+    setMinimumSize(fontui::dp(260, m_dpr), fontui::dp(280, m_dpr));
+    update();
 }
 
 void GlyphPreviewWidget::setGlyphData(QChar ch,
@@ -196,6 +232,7 @@ void GlyphPreviewWidget::clear()
     m_has_data = false;
     m_outline  = {};
     m_last_label_rects.clear();
+    m_last_label_texts.clear();
     m_last_underline_band = {};
     m_last_strikeout_band = {};
     m_last_outline_points.clear();
@@ -212,6 +249,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     Q_UNUSED(event);
 
     m_last_label_rects.clear();
+    m_last_label_texts.clear();
     m_last_underline_band = {};
     m_last_strikeout_band = {};
     m_last_outline_points.clear();
@@ -293,10 +331,29 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     // Translate glyph_box to actual drawing position
     glyph_box.translate(text_x, text_y);
 
+    const bool dark = fontui::isDarkPalette(pal);
+    const qreal dpr = m_dpr;
+    const QColor muted_guide = fontui::mutedTextColor(pal);
+    const QColor ascent_clr  = dark ? QColor(100, 150, 255) : QColor(29, 111, 216);
+    const QColor descent_clr = dark ? QColor(255, 150, 100) : QColor(201, 81, 27);
+    const QColor cap_clr     = dark ? QColor(255, 100, 200) : QColor(179, 50, 138);
+    const QColor xh_clr      = dark ? QColor(100, 200, 150) : QColor(25, 135, 107);
+    const QColor bbox_clr    = dark ? QColor(100, 255, 100, 110) : QColor(27, 127, 55, 140);
+    const QColor adv_clr     = dark ? QColor(200, 100, 255) : QColor(124, 58, 237);
+    const QColor ul_clr      = dark ? QColor(70, 160, 255) : QColor(2, 136, 209);
+    const QColor st_clr      = dark ? QColor(255, 120, 80) : QColor(211, 47, 47);
+    const QColor sb_clr      = dark ? QColor(150, 150, 150) : QColor(95, 99, 104);
+    const qreal pad_10       = fontui::dpf(10.0, dpr);
+    const qreal pad_20       = fontui::dpf(20.0, dpr);
+    const qreal pad_30       = fontui::dpf(30.0, dpr);
+    const qreal stroke_1     = fontui::dpf(1.0, dpr);
+
     // Draw advance width rectangle (subtle fill)
+    QColor adv_fill = adv_clr;
+    adv_fill.setAlpha(dark ? 12 : 16);
     painter.fillRect(
-        QRectF(text_x, 20.0, display_advance, rect.height() - 40.0),
-        QColor(200, 100, 255, 10));
+        QRectF(text_x, pad_20, display_advance, rect.height() - pad_20 * 2.0),
+        adv_fill);
 
     // Derive em pixel size from the same font size source used to draw the glyph.
     qreal em_px = 0.0;
@@ -311,7 +368,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     }
 
     const int upem         = m_deco_metrics.units_per_em;
-    const qreal band_width = qMax(0.0, rect.width() - 20.0);
+    const qreal band_width = qMax(0.0, rect.width() - pad_10 * 2.0);
     qreal underline_top_y  = 0.0;
     bool draw_underline    = false;
     qreal strike_top_y     = 0.0;
@@ -324,14 +381,18 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
                   - (qreal(m_deco_metrics.underline_pos) / upem) * em_px;
             const qreal band_h = qMax(
                 1.0, (qreal(m_deco_metrics.underline_thick) / upem) * em_px);
-            const QRectF ul_rect(10.0, underline_top_y, band_width, band_h);
-            painter.fillRect(ul_rect, QColor(70, 160, 255, 38));
-            QPen ul_pen(QColor(70, 160, 255, 190));
+            const QRectF ul_rect(pad_10, underline_top_y, band_width, band_h);
+            QColor ul_fill = ul_clr;
+            ul_fill.setAlpha(38);
+            painter.fillRect(ul_rect, ul_fill);
+            QColor ul_line = ul_clr;
+            ul_line.setAlpha(190);
+            QPen ul_pen(ul_line);
             ul_pen.setStyle(Qt::DashLine);
-            ul_pen.setWidthF(1.0);
+            ul_pen.setWidthF(stroke_1);
             painter.setPen(ul_pen);
-            painter.drawLine(QPointF(10.0, underline_top_y),
-                             QPointF(rect.width() - 10.0, underline_top_y));
+            painter.drawLine(QPointF(pad_10, underline_top_y),
+                             QPointF(rect.width() - pad_10, underline_top_y));
             m_last_underline_band = ul_rect;
             draw_underline        = true;
         }
@@ -341,94 +402,117 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
                   - (qreal(m_deco_metrics.strikeout_pos) / upem) * em_px;
             const qreal band_h = qMax(
                 1.0, (qreal(m_deco_metrics.strikeout_size) / upem) * em_px);
-            const QRectF st_rect(10.0, strike_top_y, band_width, band_h);
-            painter.fillRect(st_rect, QColor(255, 120, 80, 38));
-            QPen st_pen(QColor(255, 120, 80, 190));
+            const QRectF st_rect(pad_10, strike_top_y, band_width, band_h);
+            QColor st_fill = st_clr;
+            st_fill.setAlpha(38);
+            painter.fillRect(st_rect, st_fill);
+            QColor st_line = st_clr;
+            st_line.setAlpha(190);
+            QPen st_pen(st_line);
             st_pen.setStyle(Qt::DashLine);
-            st_pen.setWidthF(1.0);
+            st_pen.setWidthF(stroke_1);
             painter.setPen(st_pen);
-            painter.drawLine(QPointF(10.0, strike_top_y),
-                             QPointF(rect.width() - 10.0, strike_top_y));
+            painter.drawLine(QPointF(pad_10, strike_top_y),
+                             QPointF(rect.width() - pad_10, strike_top_y));
             m_last_strikeout_band = st_rect;
             draw_strikeout        = true;
         }
     }
 
     // Draw baseline (dashed line) - horizontal through text baseline
-    QPen baseline_pen(pal.mid().color());
+    QPen baseline_pen(muted_guide);
     baseline_pen.setStyle(Qt::DashLine);
-    baseline_pen.setWidthF(1.0);
+    baseline_pen.setWidthF(stroke_1);
     painter.setPen(baseline_pen);
-    painter.drawLine(QPointF(10.0, text_y),
-                     QPointF(rect.width() - 10.0, text_y));
+    painter.drawLine(QPointF(pad_10, text_y),
+                     QPointF(rect.width() - pad_10, text_y));
 
     // Draw vertical center line (dotted)
-    QPen center_pen(pal.mid().color());
+    QPen center_pen(muted_guide);
     center_pen.setStyle(Qt::DotLine);
-    center_pen.setWidthF(1.0);
+    center_pen.setWidthF(stroke_1);
     painter.setPen(center_pen);
-    painter.drawLine(QPointF(center_x, 10.0),
-                     QPointF(center_x, rect.height() - 10.0));
+    painter.drawLine(QPointF(center_x, pad_10),
+                     QPointF(center_x, rect.height() - pad_10));
 
     // Draw advance width vertical lines
-    QPen advance_pen(QColor(200, 100, 255, 120));
+    QColor adv_line = adv_clr;
+    adv_line.setAlpha(dark ? 120 : 140);
+    QPen advance_pen(adv_line);
     advance_pen.setStyle(Qt::DashLine);
+    advance_pen.setWidthF(stroke_1);
     painter.setPen(advance_pen);
-    painter.drawLine(QPointF(text_x, 20.0),
-                     QPointF(text_x, rect.height() - 20.0));
-    painter.drawLine(QPointF(text_x + display_advance, 20.0),
-                     QPointF(text_x + display_advance, rect.height() - 20.0));
+    painter.drawLine(QPointF(text_x, pad_20),
+                     QPointF(text_x, rect.height() - pad_20));
+    painter.drawLine(QPointF(text_x + display_advance, pad_20),
+                     QPointF(text_x + display_advance, rect.height() - pad_20));
 
     // Draw ascent line (above baseline)
-    QPen ascent_pen(QColor(100, 150, 255, 120));
+    QColor asc_line = ascent_clr;
+    asc_line.setAlpha(dark ? 120 : 140);
+    QPen ascent_pen(asc_line);
     ascent_pen.setStyle(Qt::DotLine);
+    ascent_pen.setWidthF(stroke_1);
     painter.setPen(ascent_pen);
     qreal ascent_y = text_y - display_ascent;
-    painter.drawLine(QPointF(10.0, ascent_y),
-                     QPointF(rect.width() - 10.0, ascent_y));
+    painter.drawLine(QPointF(pad_10, ascent_y),
+                     QPointF(rect.width() - pad_10, ascent_y));
 
     // Draw descent line (below baseline)
-    QPen descent_pen(QColor(255, 150, 100, 120));
+    QColor desc_line = descent_clr;
+    desc_line.setAlpha(dark ? 120 : 140);
+    QPen descent_pen(desc_line);
     descent_pen.setStyle(Qt::DotLine);
+    descent_pen.setWidthF(stroke_1);
     painter.setPen(descent_pen);
     qreal descent_y = text_y + display_descent;
-    painter.drawLine(QPointF(10.0, descent_y),
-                     QPointF(rect.width() - 10.0, descent_y));
+    painter.drawLine(QPointF(pad_10, descent_y),
+                     QPointF(rect.width() - pad_10, descent_y));
 
     // Draw cap height line
     qreal cap_y = text_y - display_fm.capHeight();
     if (display_fm.capHeight() > 0 && qAbs(cap_y - ascent_y) > 0.1) {
-        QPen cap_pen(QColor(255, 100, 200, 120));
+        QColor cap_line = cap_clr;
+        cap_line.setAlpha(dark ? 120 : 140);
+        QPen cap_pen(cap_line);
         cap_pen.setStyle(Qt::DotLine);
+        cap_pen.setWidthF(stroke_1);
         painter.setPen(cap_pen);
-        painter.drawLine(QPointF(10.0, cap_y),
-                         QPointF(rect.width() - 10.0, cap_y));
+        painter.drawLine(QPointF(pad_10, cap_y),
+                         QPointF(rect.width() - pad_10, cap_y));
     }
 
     // Draw x-height line
     qreal x_y = text_y - display_fm.xHeight();
     if (display_fm.xHeight() > 0) {
-        QPen x_pen(QColor(100, 200, 150, 120));
+        QColor xh_line = xh_clr;
+        xh_line.setAlpha(dark ? 120 : 140);
+        QPen x_pen(xh_line);
         x_pen.setStyle(Qt::DotLine);
+        x_pen.setWidthF(stroke_1);
         painter.setPen(x_pen);
-        painter.drawLine(QPointF(10.0, x_y), QPointF(rect.width() - 10.0, x_y));
+        painter.drawLine(QPointF(pad_10, x_y),
+                         QPointF(rect.width() - pad_10, x_y));
     }
 
     // Draw bounding box (green) - actual glyph bounds
-    QPen bbox_pen(QColor(100, 255, 100, 100));
+    QPen bbox_pen(bbox_clr);
     bbox_pen.setStyle(Qt::DashDotLine);
-    bbox_pen.setWidthF(1.0);
+    bbox_pen.setWidthF(stroke_1);
     painter.setPen(bbox_pen);
     painter.drawRect(glyph_box);
 
     // Draw bearing markers
-    QPen bearing_pen(QColor(150, 150, 150, 80));
+    QColor bearing_line = sb_clr;
+    bearing_line.setAlpha(dark ? 80 : 110);
+    QPen bearing_pen(bearing_line);
     bearing_pen.setStyle(Qt::DotLine);
+    bearing_pen.setWidthF(stroke_1);
     painter.setPen(bearing_pen);
-    painter.drawLine(QPointF(glyph_box.left(), 30.0),
-                     QPointF(glyph_box.left(), rect.height() - 30.0));
-    painter.drawLine(QPointF(glyph_box.right(), 30.0),
-                     QPointF(glyph_box.right(), rect.height() - 30.0));
+    painter.drawLine(QPointF(glyph_box.left(), pad_30),
+                     QPointF(glyph_box.left(), rect.height() - pad_30));
+    painter.drawLine(QPointF(glyph_box.right(), pad_30),
+                     QPointF(glyph_box.right(), rect.height() - pad_30));
 
     // Draw the glyph
     painter.setFont(display_font);
@@ -455,7 +539,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         m_last_outline_points = screen_pts;
 
         QPen handle_pen(QColor(230, 125, 35, 165));
-        handle_pen.setWidthF(1.0);
+        handle_pen.setWidthF(stroke_1);
         painter.setPen(handle_pen);
         int contour_start = 0;
         for (int contour_end : m_outline.contour_ends) {
@@ -486,18 +570,23 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         }
 
         const QColor base_col = pal.base().color();
+        const qreal pt_r      = fontui::dpf(2.5, dpr);
+        const qreal pt_side   = fontui::dpf(5.0, dpr);
         for (int i = 0; i < screen_pts.size(); ++i) {
             const QPointF &pt = screen_pts[i];
             if (m_outline.tags[i] == GlyphOutlineData::PointKind::OnCurve) {
-                painter.setPen(QPen(QColor(255, 255, 255, 220), 1.0));
+                painter.setPen(QPen(
+                    dark ? QColor(255, 255, 255, 220) : QColor(20, 40, 70, 220),
+                    stroke_1));
                 painter.setBrush(QColor(35, 145, 255));
                 painter.drawRect(
-                    QRectF(pt.x() - 2.5, pt.y() - 2.5, 5.0, 5.0));
+                    QRectF(pt.x() - pt_r, pt.y() - pt_r, pt_side, pt_side));
             }
             else {
-                painter.setPen(QPen(QColor(230, 125, 35), 1.5));
+                painter.setPen(
+                    QPen(QColor(230, 125, 35), fontui::dpf(1.5, dpr)));
                 painter.setBrush(base_col);
-                painter.drawEllipse(pt, 2.5, 2.5);
+                painter.drawEllipse(pt, pt_r, pt_r);
             }
         }
         painter.setBrush(Qt::NoBrush);
@@ -505,83 +594,90 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
 
     // Draw metric labels measured against the widget font and kept within
     // bounds without overlapping each other.
+    painter.save();
     QFont label_font = this->font();
     label_font.setPointSize(8);
     painter.setFont(label_font);
     const QFontMetricsF label_fm(label_font, this);
-    const QRectF safe_bounds = QRectF(rect).adjusted(4.0, 4.0, -4.0, -4.0);
+    const qreal safe_inset   = fontui::dpf(4.0, dpr);
+    const qreal step_pad     = fontui::dpf(2.0, dpr);
+    const qreal gap_x        = fontui::dpf(2.0, dpr);
+    const QRectF safe_bounds = QRectF(rect).adjusted(safe_inset, safe_inset,
+                                                     -safe_inset, -safe_inset);
+    painter.setClipRect(safe_bounds);
     QVector<QRectF> occupied_labels;
 
     auto measureLabelWidth = [&](const QString &elided) {
         const qreal text_w = qMax(label_fm.horizontalAdvance(elided),
                                   label_fm.boundingRect(elided).width());
-        return qMin(safe_bounds.width(), qCeil(text_w) + 4.0);
+        return qMin(safe_bounds.width(), qCeil(text_w) + safe_inset);
     };
 
     auto drawMetricLabel = [&](qreal y, const QString &text, QColor color,
                                bool isAbove) {
-        const qreal h = qCeil(label_fm.height()) + 2.0;
-        if (safe_bounds.width() <= 4.0 || safe_bounds.height() < h) {
+        const qreal h = qCeil(label_fm.height()) + step_pad;
+        if (safe_bounds.width() <= safe_inset || safe_bounds.height() < h) {
             return;
         }
         const QString elided = label_fm.elidedText(
-            text, Qt::ElideRight, qMax(1.0, safe_bounds.width() - 4.0));
+            text, Qt::ElideRight, qMax(1.0, safe_bounds.width() - safe_inset));
         const qreal w = measureLabelWidth(elided);
         const qreal x = qMax(safe_bounds.left(), safe_bounds.right() - w);
         const QRectF preferred(x, isAbove ? y - h - 1.0 : y + 1.0, w, h);
         const QRectF r = placeNonOverlappingLabel(
-            preferred, safe_bounds, isAbove ? -(h + 2.0) : (h + 2.0),
-            occupied_labels);
+            preferred, safe_bounds, isAbove ? -(h + step_pad) : (h + step_pad),
+            occupied_labels, true);
 
         occupied_labels.append(r);
         m_last_label_rects.append(r);
+        m_last_label_texts.append(text);
         painter.setPen(color);
         painter.drawText(r, Qt::AlignRight | Qt::AlignVCenter, elided);
     };
 
     // Priority order places core baseline/extents first, then secondary metrics.
-    drawMetricLabel(text_y, "baseline", pal.mid().color(), false);
-    drawMetricLabel(ascent_y, "ascent", QColor(100, 150, 255), true);
-    drawMetricLabel(descent_y, "descent", QColor(255, 150, 100), false);
+    drawMetricLabel(text_y, "baseline", muted_guide, true);
+    drawMetricLabel(ascent_y, "ascent", ascent_clr, true);
+    drawMetricLabel(descent_y, "descent", descent_clr, false);
     if (display_fm.capHeight() > 0 && qAbs(cap_y - ascent_y) > 0.1) {
-        drawMetricLabel(cap_y, "cap height", QColor(255, 100, 200), true);
+        drawMetricLabel(cap_y, "cap height", cap_clr, true);
     }
     if (display_fm.xHeight() > 0) {
-        drawMetricLabel(x_y, "x-height", QColor(100, 200, 150), true);
+        drawMetricLabel(x_y, "x-height", xh_clr, true);
     }
     if (draw_strikeout) {
         drawMetricLabel(strike_top_y,
                         QString("strikeout (%1/%2)")
                             .arg(m_deco_metrics.strikeout_pos)
                             .arg(m_deco_metrics.strikeout_size),
-                        QColor(255, 120, 80), true);
+                        st_clr, true);
     }
     if (draw_underline) {
         drawMetricLabel(underline_top_y,
                         QString("underline (%1/%2)")
                             .arg(m_deco_metrics.underline_pos)
                             .arg(m_deco_metrics.underline_thick),
-                        QColor(70, 160, 255), false);
+                        ul_clr, false);
     }
 
     // Vertical metrics (Origin, Advance, LSB, RSB)
     auto drawVerticalLabel = [&](qreal x, const QString &text, QColor color,
                                  bool isBottom, bool isLeftOfLine) {
-        const qreal h = qCeil(label_fm.height()) + 2.0;
-        if (safe_bounds.width() <= 4.0 || safe_bounds.height() < h) {
+        const qreal h = qCeil(label_fm.height()) + step_pad;
+        if (safe_bounds.width() <= safe_inset || safe_bounds.height() < h) {
             return;
         }
         const QString elided = label_fm.elidedText(
-            text, Qt::ElideRight, qMax(1.0, safe_bounds.width() - 4.0));
-        const qreal w      = measureLabelWidth(elided);
-        qreal label_x      = isLeftOfLine ? x - w - 2.0 : x + 2.0;
+            text, Qt::ElideRight, qMax(1.0, safe_bounds.width() - safe_inset));
+        const qreal w = measureLabelWidth(elided);
+        qreal label_x = isLeftOfLine ? x - w - gap_x : x + gap_x;
 
         // Boundary check: if outside is clipped by widget, move to inside
         if (label_x < safe_bounds.left()) {
-            label_x = x + 2.0;
+            label_x = x + gap_x;
         }
         if (label_x + w > safe_bounds.right()) {
-            label_x = x - w - 2.0;
+            label_x = x - w - gap_x;
         }
         label_x = qBound(safe_bounds.left(), label_x, safe_bounds.right() - w);
 
@@ -589,10 +685,11 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
             = isBottom ? (safe_bounds.bottom() - h) : safe_bounds.top();
         const QRectF r = placeNonOverlappingLabel(
             QRectF(label_x, label_y, w, h), safe_bounds,
-            isBottom ? -(h + 2.0) : (h + 2.0), occupied_labels);
+            isBottom ? -(h + step_pad) : (h + step_pad), occupied_labels);
 
         occupied_labels.append(r);
         m_last_label_rects.append(r);
+        m_last_label_texts.append(text);
         painter.setPen(color);
         painter.drawText(
             r,
@@ -601,18 +698,16 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
             elided);
     };
 
-    drawVerticalLabel(text_x, "origin", QColor(200, 100, 255), true, true);
-    drawVerticalLabel(text_x + display_advance, "advance",
-                      QColor(200, 100, 255), true, false);
+    drawVerticalLabel(text_x, "origin", adv_clr, true, true);
+    drawVerticalLabel(text_x + display_advance, "advance", adv_clr, true, false);
 
     if (qAbs(glyph_box.left() - text_x) > 0.1) {
-        drawVerticalLabel(glyph_box.left(), "LSB", QColor(150, 150, 150), false,
-                          true);
+        drawVerticalLabel(glyph_box.left(), "LSB", sb_clr, false, true);
     }
     if (qAbs(glyph_box.right() - (text_x + display_advance)) > 0.1) {
-        drawVerticalLabel(glyph_box.right(), "RSB", QColor(150, 150, 150),
-                          false, false);
+        drawVerticalLabel(glyph_box.right(), "RSB", sb_clr, false, false);
     }
+    painter.restore();
 }
 
 // GlyphInspectorWidget implementation
@@ -621,13 +716,29 @@ GlyphInspectorWidget::GlyphInspectorWidget(QWidget *parent) : QWidget(parent)
     createUI();
 }
 
+void GlyphInspectorWidget::setDpr(qreal dpr)
+{
+    const qreal clamped = fontui::clampDpr(dpr);
+    if (qFuzzyCompare(m_dpr, clamped)) {
+        return;
+    }
+    m_dpr = clamped;
+    if (m_main_layout) {
+        const int pad = fontui::dp(10, m_dpr);
+        m_main_layout->setContentsMargins(pad, pad, pad, pad);
+        m_main_layout->setSpacing(pad);
+    }
+    if (m_preview_widget) {
+        m_preview_widget->setDpr(m_dpr);
+    }
+}
+
 void GlyphInspectorWidget::createUI()
 {
-    setMinimumWidth(320);
-
-    auto main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(10, 10, 10, 10);
-    main_layout->setSpacing(10);
+    m_main_layout = new QVBoxLayout(this);
+    const int pad = fontui::dp(10, m_dpr);
+    m_main_layout->setContentsMargins(pad, pad, pad, pad);
+    m_main_layout->setSpacing(pad);
 
     // No selection label
     m_label_no_selection
@@ -638,10 +749,8 @@ void GlyphInspectorWidget::createUI()
     font.setPointSize(14);
     font.setItalic(true);
     m_label_no_selection->setFont(font);
-    QPalette pal = m_label_no_selection->palette();
-    pal.setColor(QPalette::WindowText, pal.color(QPalette::Mid));
-    m_label_no_selection->setPalette(pal);
-    main_layout->addWidget(m_label_no_selection, 1);
+    applyEmptyLabelPalette();
+    m_main_layout->addWidget(m_label_no_selection, 1);
 
     // Unicode Information group
     m_group_unicode = new QGroupBox("Unicode Information", this);
@@ -656,7 +765,7 @@ void GlyphInspectorWidget::createUI()
     unicode_layout->addRow("Code Point:", m_label_unicode_value);
     unicode_layout->addRow("Decimal:", m_label_unicode_decimal);
     unicode_layout->addRow("Block:", m_label_unicode_block);
-    main_layout->addWidget(m_group_unicode);
+    m_main_layout->addWidget(m_group_unicode);
 
     // Glyph Metrics group
     m_group_glyph = new QGroupBox("Glyph Metrics", this);
@@ -677,7 +786,7 @@ void GlyphInspectorWidget::createUI()
     glyph_layout->addRow("Bearings:", m_label_bearings);
     glyph_layout->addRow("Contours:", m_label_contours);
     glyph_layout->addRow("Points:", m_label_points);
-    main_layout->addWidget(m_group_glyph);
+    m_main_layout->addWidget(m_group_glyph);
 
     // Font Metrics group
     m_group_font = new QGroupBox("Font Metrics", this);
@@ -701,7 +810,7 @@ void GlyphInspectorWidget::createUI()
     font_layout->addRow("Units per Em:", m_label_units_per_em);
     font_layout->addRow("Underline:", m_label_underline);
     font_layout->addRow("Strikeout:", m_label_strikeout);
-    main_layout->addWidget(m_group_font);
+    m_main_layout->addWidget(m_group_font);
 
     // Visual Preview group
     m_group_preview     = new QGroupBox("Visual Preview", this);
@@ -715,9 +824,10 @@ void GlyphInspectorWidget::createUI()
     preview_bar->addWidget(m_chk_outline);
     preview_layout->addLayout(preview_bar);
     m_preview_widget = new GlyphPreviewWidget(this);
+    m_preview_widget->setDpr(m_dpr);
     m_preview_widget->setShowOutlinePoints(m_show_outline_points);
     preview_layout->addWidget(m_preview_widget, 1);
-    main_layout->addWidget(m_group_preview, 1);
+    m_main_layout->addWidget(m_group_preview, 1);
 
     connect(m_chk_outline, &QCheckBox::toggled, this, [this](bool on) {
         if (m_show_outline_points == on) {
@@ -746,6 +856,16 @@ void GlyphInspectorWidget::setShowOutlinePoints(bool on)
     if (m_preview_widget) {
         m_preview_widget->setShowOutlinePoints(on);
     }
+}
+
+void GlyphInspectorWidget::setOutlineShortcutHint(const QString &hint)
+{
+    if (!m_chk_outline) {
+        return;
+    }
+    const QString base = tr("Show outline control points");
+    m_chk_outline->setToolTip(
+        hint.isEmpty() ? base : QStringLiteral("%1 (%2)").arg(base, hint));
 }
 
 void GlyphInspectorWidget::updateGlyph(QChar ch,
@@ -816,9 +936,32 @@ void GlyphInspectorWidget::updateFont(const QFont &font,
     }
 }
 
+void GlyphInspectorWidget::applyEmptyLabelPalette()
+{
+    if (!m_label_no_selection) {
+        return;
+    }
+    QPalette pal = palette();
+    pal.setColor(QPalette::WindowText, fontui::mutedTextColor(palette()));
+    m_label_no_selection->setPalette(pal);
+}
+
+void GlyphInspectorWidget::changeEvent(QEvent *event)
+{
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange
+        || event->type() == QEvent::ApplicationPaletteChange) {
+        applyEmptyLabelPalette();
+        if (m_preview_widget) {
+            m_preview_widget->update();
+        }
+    }
+}
+
 void GlyphInspectorWidget::updateTheme(int theme)
 {
     m_theme = theme;
+    applyEmptyLabelPalette();
     if (m_preview_widget) {
         m_preview_widget->update();
     }

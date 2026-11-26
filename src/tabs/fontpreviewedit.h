@@ -10,6 +10,7 @@ public:
 
     static constexpr int kMaxPasteChars = 10000;
 
+    void setDpr(qreal dpr);
     void setPreviewText(const QString &text);
     void setLineHeight(qreal height);
     qreal lineHeight() const
@@ -20,6 +21,7 @@ public:
     Q_SIGNAL void sigToast(const QString &msg);
     Q_SIGNAL void sigUserEdited();
     Q_SIGNAL void sigZoomRequested(int steps);
+    Q_SIGNAL void sigFocusChanged(bool focused);
 
 protected:
     bool event(QEvent *event) override;
@@ -29,12 +31,11 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
-    void paintEvent(QPaintEvent *event) override;
-    void scrollContentsBy(int dx, int dy) override;
 
 private:
     void applyLineHeightToAll();
 
+    qreal m_dpr            = 1.0;
     qreal m_line_height    = 1.4;
     bool m_applying_format = false;
     bool m_setting_text    = false;

@@ -5,7 +5,7 @@
 #include <QVector>
 #include <QWidget>
 
-#include "fontinspectorengine.h"
+#include "engine/fontinspectorengine.h"
 
 class QCheckBox;
 class QLabel;
@@ -26,6 +26,7 @@ public:
                      const QString &font_path,
                      const FontDecorationMetrics &deco = {},
                      const GlyphOutlineData &outline   = {});
+    void setDpr(qreal dpr);
     void clearSelection();
     QPixmap getPreviewPixmap() const;
     bool hasSelection() const
@@ -53,6 +54,7 @@ public:
     {
         return m_show_outline_points;
     }
+    void setOutlineShortcutHint(const QString &hint);
     GlyphPreviewWidget *previewWidget() const
     {
         return m_preview_widget;
@@ -64,8 +66,12 @@ public slots:
                     const GlyphOutlineData &outline   = {});
     void updateTheme(int theme);
 
+protected:
+    void changeEvent(QEvent *event) override;
+
 private:
     void createUI();
+    void applyEmptyLabelPalette();
     void updateMetrics();
     void updateLabels();
     QString getUnicodeBlockName(ushort code_point);
@@ -113,8 +119,10 @@ private:
     QGroupBox *m_group_glyph;
     QGroupBox *m_group_font;
     QGroupBox *m_group_preview;
+    QVBoxLayout *m_main_layout = nullptr;
 
-    int m_theme = 0;
+    int m_theme  = 0;
+    qreal m_dpr  = 1.0;
 };
 
 // Custom widget for glyph preview rendering
@@ -124,6 +132,7 @@ class GlyphPreviewWidget : public QWidget {
 public:
     explicit GlyphPreviewWidget(QWidget *parent = nullptr);
 
+    void setDpr(qreal dpr);
     void setGlyphData(QChar ch,
                       const QFont &font,
                       const QRectF &bbox,
@@ -140,6 +149,10 @@ public:
     QVector<QRectF> lastLabelRects() const
     {
         return m_last_label_rects;
+    }
+    QStringList lastLabelTexts() const
+    {
+        return m_last_label_texts;
     }
     QRectF lastUnderlineBand() const
     {
@@ -165,10 +178,12 @@ private:
     QRectF m_bbox;
     FontDecorationMetrics m_deco_metrics;
     GlyphOutlineData m_outline;
+    qreal m_dpr                 = 1.0;
     qreal m_advance_width       = 0;
     bool m_has_data             = false;
     bool m_show_outline_points  = false;
     mutable QVector<QRectF> m_last_label_rects;
+    mutable QStringList m_last_label_texts;
     mutable QRectF m_last_underline_band;
     mutable QRectF m_last_strikeout_band;
     mutable QVector<QPointF> m_last_outline_points;

@@ -47,17 +47,33 @@ FetchContent_MakeAvailable(freetype)
 # The viewer sources are compiled once and shared by the shipping DLL and the
 # test binary, so the tests exercise the exact objects that ship.
 set(FONTVIEWER_SOURCES
-    characterwidget.cpp
-    fontinspectorengine.cpp
-    fontinspectorengine.h
-    fontpreviewedit.cpp
-    fontpreviewedit.h
+    bars/opentypefeaturesbar.cpp
+    bars/opentypefeaturesbar.h
+    bars/variableaxesbar.cpp
+    bars/variableaxesbar.h
+    engine/fontinspectorengine.cpp
+    engine/fontinspectorengine.h
+    fontshortcuts.cpp
+    fontshortcuts.h
+    fontui.cpp
+    fontui.h
     fontviewer.cpp
+    fontviewer.h
     fontwidget.cpp
+    fontwidget.h
     fontwidget.ui
-    glyphinspectorwidget.cpp
-    waterfallwidget.cpp
-    waterfallwidget.h
+    tabs/characterwidget.cpp
+    tabs/characterwidget.h
+    tabs/fontpreviewedit.cpp
+    tabs/fontpreviewedit.h
+    tabs/glyphinspectorwidget.cpp
+    tabs/glyphinspectorwidget.h
+    tabs/samplepreviewtab.cpp
+    tabs/samplepreviewtab.h
+    tabs/textpreviewtab.cpp
+    tabs/textpreviewtab.h
+    tabs/waterfallwidget.cpp
+    tabs/waterfallwidget.h
     ${seersdk_SOURCE_DIR}/seer/viewerbase.h
 )
 

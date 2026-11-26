@@ -21,6 +21,7 @@
 #include <QImage>
 #include <QInputMethodEvent>
 #include <QLabel>
+#include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
@@ -40,19 +41,24 @@
 #include <QTextBlock>
 #include <QTextBlockFormat>
 #include <QTextDocument>
+#include <QToolTip>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QtNumeric>
 
 #include <limits>
 
-#include "characterwidget.h"
-#include "fontinspectorengine.h"
-#include "fontpreviewedit.h"
+#include "bars/opentypefeaturesbar.h"
+#include "bars/variableaxesbar.h"
+#include "engine/fontinspectorengine.h"
+#include "fontshortcuts.h"
 #include "fontviewer.h"
 #include "fontwidget.h"
-#include "glyphinspectorwidget.h"
-#include "waterfallwidget.h"
+#include "tabs/characterwidget.h"
+#include "tabs/fontpreviewedit.h"
+#include "tabs/glyphinspectorwidget.h"
+#include "tabs/textpreviewtab.h"
+#include "tabs/waterfallwidget.h"
 
 namespace {
 QString fixturePath(const char *name)
@@ -238,6 +244,21 @@ private slots:
     void glyphPreviewHandlesExtremeContourEndWithoutOverflow();
     void glyphPreviewSkipsChordBetweenAdjacentOffCubicHandles();
     void tabWidgetHasSingleGridEntryAndNoBlankGapOnStaticFont();
+    void shortcutsSeedEmptyAndMissingIniAndAllowOverride();
+    void shortcutsExecuteActionsWhileFocusedEditorAcceptsText();
+    void getContentSizeIgnoresPluginCmdAndScalesDpr();
+    void glyphInspectorSmallDescentAndNarrowViewportNoOverlapOrOverflow();
+    void uiUsesDefaultCursorNoCjkPresetAndGroupsTypography();
+    void featurePillsLightModeContrastAndCheckedIndicator();
+    void dprScalingUpdatesLayoutMetricsAndIcons();
+    void iniPresetsSeedLoadElideAndPreserveUserText();
+    void toolbarReflowsWhenResetTogglesAndAvoidsDanglingPresetSeparator();
+    void openTypeFeatureParserBoundsEmptyScriptLangAndOobOffsets();
+    void characterWidgetTooltipEscapesHtmlAndHidesOnEmptySpace();
+    void paletteChangeUpdatesToolbarIconsSeparatorAndEmptyLabel();
+    void customPresetDoesNotWidenDropdownOrSplitSurrogateTitle();
+    void waterfallScrollsToNewlyInsertedLargeCustomSizeWhileVisible();
+    void customShortcutCannotBreakFixedZoomShortcuts();
 };
 
 void ViewerTest::escReleaseRunsAfterTheEventLoop()
@@ -680,7 +701,7 @@ void ViewerTest::chromeControlsClearEditorFocus()
 
     QPushButton *toggle_btn = nullptr;
     for (QPushButton *btn : view.findChildren<QPushButton *>()) {
-        if (btn->toolTip() == QLatin1String("Collapse")) {
+        if (btn->toolTip().startsWith(QLatin1String("Collapse"))) {
             toggle_btn = btn;
             break;
         }
@@ -1416,14 +1437,8 @@ void ViewerTest::variableAxesBarControlsFocusWheelAndReset()
         static_view.show();
         QVERIFY(QTest::qWaitForWindowExposed(&static_view));
 
-        QPushButton *reset_btn = nullptr;
-        for (QPushButton *b : static_view.findChildren<QPushButton *>()) {
-            if (b->text() == QLatin1String("Reset")) {
-                reset_btn = b;
-                break;
-            }
-        }
-        QVERIFY(reset_btn == nullptr);
+        auto *axes = static_view.findChild<VariableAxesBar *>();
+        QVERIFY(axes == nullptr || !axes->isVisible());
     }
 
     // Variable font shows axis sliders + Reset buttons, keeps them NoFocus,
@@ -1434,8 +1449,10 @@ void ViewerTest::variableAxesBarControlsFocusWheelAndReset()
     view.show();
     QVERIFY(QTest::qWaitForWindowExposed(&view));
 
+    auto *axes = view.findChild<VariableAxesBar *>();
+    QVERIFY(axes != nullptr);
     QVector<QPushButton *> resets;
-    for (QPushButton *b : view.findChildren<QPushButton *>()) {
+    for (QPushButton *b : axes->findChildren<QPushButton *>()) {
         if (b->text() == QLatin1String("Reset")) {
             QCOMPARE(b->focusPolicy(), Qt::NoFocus);
             QVERIFY(b->isVisible());
@@ -1503,6 +1520,23 @@ void ViewerTest::namedInstanceSyncsOrPreservesAxisCoords()
     QVERIFY(qAbs(view.variableAxisValues().value(QByteArrayLiteral("wght"))
                  - 700.0f)
             < 5.0f);
+
+    // Dragging an axis away from Bold and clicking Reset restores Bold (700),
+    // not the Regular fvar default (400).
+    auto *axes = view.findChild<VariableAxesBar *>();
+    QVERIFY(axes != nullptr);
+    const auto axis_resets = axes->findChildren<QPushButton *>();
+    QVERIFY(!axis_resets.isEmpty());
+    QVERIFY(!axis_resets.first()->isEnabled());
+    view.setVariableAxisValue(QByteArrayLiteral("wght"), 500.0f);
+    QApplication::processEvents();
+    QVERIFY(axis_resets.first()->isEnabled());
+    axis_resets.first()->click();
+    QApplication::processEvents();
+    QVERIFY(qAbs(view.variableAxisValues().value(QByteArrayLiteral("wght"))
+                 - 700.0f)
+            < 5.0f);
+    QVERIFY(!axis_resets.first()->isEnabled());
 
     const int condensed_idx = style_cb->findText(QStringLiteral("Condensed"));
     if (condensed_idx >= 0) {
@@ -2302,10 +2336,12 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
             view->setFeatureEnabled(QByteArrayLiteral("dlig"), false);
         }
 
-        // Clicking a pill or Reset Features must clear FontPreviewEdit focus.
+        // Clicking a pill or OpenType Reset must clear FontPreviewEdit focus.
+        auto *feat_bar = view->findChild<OpenTypeFeaturesBar *>();
+        QVERIFY(feat_bar != nullptr);
         QPushButton *reset_btn = nullptr;
-        for (QPushButton *b : view->findChildren<QPushButton *>()) {
-            if (b->text() == QStringLiteral("Reset Features")) {
+        for (QPushButton *b : feat_bar->findChildren<QPushButton *>()) {
+            if (b->text() == QStringLiteral("Reset")) {
                 reset_btn = b;
                 break;
             }
@@ -2364,31 +2400,29 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         QCOMPARE(view->isFeatureEnabled(toggle_tag), !initial_on);
     }
 
-    // Many-feature fonts (Noto Sans VF has 40+ features) must stay focus-free
-    // and keep the OpenType bar bounded so tabs stay usable.
+    // Many-feature fonts (Noto Sans VF has 40+ features) must stay focus-free,
+    // render all pills without an internal scrollbar, and keep tabs usable.
     {
         const QString noto_vf = fixturePath("NotoSans-VariableFont_wdth,wght.ttf");
         QVERIFY(!noto_vf.isEmpty());
         FontWidget noto_view;
         QVERIFY(noto_view.init(noto_vf));
-        noto_view.resize(480, 620);
+        noto_view.resize(850, 800);
         noto_view.show();
         QVERIFY(QTest::qWaitForWindowExposed(&noto_view));
         QApplication::processEvents();
-        QVERIFY(noto_view.featurePillButtons().size() >= 30);
+        const auto pills = noto_view.featurePillButtons();
+        QVERIFY(pills.size() >= 30);
         auto *noto_tabs = noto_view.findChild<QTabWidget *>();
         QVERIFY(noto_tabs != nullptr);
         QVERIFY(noto_tabs->height() >= 250);
-        QScrollArea *feat_scroll = nullptr;
-        for (QScrollArea *sa : noto_view.findChildren<QScrollArea *>()) {
-            if (!sa->findChildren<QPushButton *>().isEmpty()) {
-                feat_scroll = sa;
-                break;
-            }
+        auto *feat_bar = noto_view.findChild<OpenTypeFeaturesBar *>();
+        QVERIFY(feat_bar != nullptr);
+        QVERIFY(feat_bar->findChildren<QScrollArea *>().isEmpty());
+        for (QPushButton *pill : pills) {
+            QVERIFY(pill->isVisible());
+            QVERIFY(!pill->visibleRegion().isEmpty());
         }
-        QVERIFY(feat_scroll != nullptr);
-        QVERIFY(feat_scroll->verticalScrollBar()->maximum() > 0);
-        QVERIFY(feat_scroll->height() <= 120);
         for (QWidget *child : noto_view.findChildren<QWidget *>()) {
             if (qobject_cast<FontPreviewEdit *>(child)
                 || child->window() != noto_view.window()) {
@@ -3173,6 +3207,1240 @@ void ViewerTest::tabWidgetHasSingleGridEntryAndNoBlankGapOnStaticFont()
     }
     QCOMPARE(tab_item_count, 1);
     QVERIFY(tabs->height() > 350);
+}
+
+void ViewerTest::shortcutsSeedEmptyAndMissingIniAndAllowOverride()
+{
+    const QString font_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!font_path.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString ini_path = dir.filePath(QStringLiteral("fontviewer.ini"));
+
+    // Seed an empty value, a custom override, an explicit "none", and an
+    // invalid Space binding; missing keys and empty values must be written with
+    // defaults into [Shortcuts].
+    {
+        QSettings seed(ini_path, QSettings::IniFormat);
+        seed.beginGroup(QStringLiteral("Shortcuts"));
+        seed.setValue(QStringLiteral("toggle_collapse"), QString());
+        seed.setValue(QStringLiteral("toggle_invert"),
+                      QStringLiteral("Ctrl+Alt+I"));
+        seed.setValue(QStringLiteral("save_svg"), QStringLiteral("none"));
+        seed.setValue(QStringLiteral("toggle_waterfall"),
+                      QStringLiteral("Space"));
+        // Fixed zoom shortcuts must ignore any manual INI overrides.
+        seed.setValue(QStringLiteral("zoom_in"), QStringLiteral("F1"));
+        seed.setValue(QStringLiteral("zoom_out"), QStringLiteral("none"));
+        seed.endGroup();
+        seed.sync();
+    }
+
+    {
+        ViewOptionsPrivate d;
+        d.path = font_path;
+        ViewOptions opts;
+        opts.d_ptr = &d;
+
+        TestFontViewer viewer(ini_path);
+        viewer.load(nullptr, &opts);
+        auto *fw = viewer.findChild<FontWidget *>();
+        QVERIFY(fw != nullptr);
+
+        QCOMPARE(fw->shortcutSequence(FontShortcutAction::ToggleCollapse),
+                 FontShortcutMap::defaultSequence(
+                     FontShortcutAction::ToggleCollapse));
+        QCOMPARE(fw->shortcutSequence(FontShortcutAction::ToggleInvert),
+                 QKeySequence(QStringLiteral("Ctrl+Alt+I")));
+        QVERIFY(fw->shortcutSequence(FontShortcutAction::SaveSvg).isEmpty());
+        QCOMPARE(fw->shortcutSequence(FontShortcutAction::ToggleWaterfall),
+                 FontShortcutMap::defaultSequence(
+                     FontShortcutAction::ToggleWaterfall));
+        QCOMPARE(fw->shortcutSequence(FontShortcutAction::ZoomIn),
+                 QKeySequence(QStringLiteral("Ctrl+="),
+                              QKeySequence::PortableText));
+        QCOMPARE(fw->shortcutSequence(FontShortcutAction::ZoomOut),
+                 QKeySequence(QStringLiteral("Ctrl+-"),
+                              QKeySequence::PortableText));
+
+        QPushButton *invert_btn = nullptr;
+        for (QPushButton *b : fw->findChildren<QPushButton *>()) {
+            if (b->text() == QLatin1String("Invert")) {
+                invert_btn = b;
+                break;
+            }
+        }
+        QVERIFY(invert_btn != nullptr);
+        QVERIFY(invert_btn->toolTip().contains(
+            QKeySequence(QStringLiteral("Ctrl+Alt+I"))
+                .toString(QKeySequence::NativeText)));
+    }
+
+    QSettings check(ini_path, QSettings::IniFormat);
+    check.beginGroup(QStringLiteral("Shortcuts"));
+    for (int i = 0; i < kFontShortcutActionCount; ++i) {
+        const auto action = static_cast<FontShortcutAction>(i);
+        if (!FontShortcutMap::isCustomizable(action)) {
+            QVERIFY(FontShortcutMap::iniKey(action).isEmpty());
+            continue;
+        }
+        const QString key = FontShortcutMap::iniKey(action).section('/', 1);
+        QVERIFY2(check.contains(key), qPrintable(key));
+        QVERIFY2(!check.value(key).toString().trimmed().isEmpty(),
+                 qPrintable(key));
+    }
+    QVERIFY(!check.contains(QStringLiteral("zoom_in")));
+    QVERIFY(!check.contains(QStringLiteral("zoom_out")));
+    QCOMPARE(
+        check.value(QStringLiteral("toggle_collapse")).toString(),
+        FontShortcutMap::defaultSequence(FontShortcutAction::ToggleCollapse)
+            .toString(QKeySequence::PortableText));
+    QCOMPARE(check.value(QStringLiteral("toggle_invert")).toString(),
+             QStringLiteral("Ctrl+Alt+I"));
+    QCOMPARE(check.value(QStringLiteral("save_svg")).toString(),
+             QStringLiteral("none"));
+    check.endGroup();
+}
+
+void ViewerTest::shortcutsExecuteActionsWhileFocusedEditorAcceptsText()
+{
+    const QString vf_path = fixturePath("Roboto-VariableFont_wdth,wght.ttf");
+    QVERIFY(!vf_path.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString ini_path = dir.filePath(QStringLiteral("fontviewer.ini"));
+
+    {
+        QSettings seed(ini_path, QSettings::IniFormat);
+        seed.setValue(QStringLiteral("Shortcuts/toggle_invert"),
+                      QStringLiteral("I"));
+        seed.sync();
+    }
+
+    ViewOptionsPrivate d;
+    d.path = vf_path;
+    ViewOptions opts;
+    opts.d_ptr = &d;
+
+    TestFontViewer viewer(ini_path);
+    viewer.load(nullptr, &opts);
+    viewer.resize(900, 700);
+    viewer.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&viewer));
+    QApplication::processEvents();
+
+    auto *fw   = viewer.findChild<FontWidget *>();
+    auto *tabs = viewer.findChild<QTabWidget *>();
+    auto *edit = viewer.findChild<FontPreviewEdit *>();
+    QVERIFY(fw != nullptr);
+    QVERIFY(tabs != nullptr);
+    QVERIFY(edit != nullptr);
+
+    // Confirm all shortcut actions fire even when focus is outside FontWidget.
+    QWidget *focus = QApplication::focusWidget();
+    QVERIFY(!focus || (focus != fw && !fw->isAncestorOf(focus)));
+
+    QTest::keyClick(&viewer, Qt::Key_B, Qt::ControlModifier);
+    QVERIFY(fw->isCollapsed());
+    QTest::keyClick(&viewer, Qt::Key_B, Qt::ControlModifier);
+    QVERIFY(!fw->isCollapsed());
+
+    QTest::keyClick(&viewer, Qt::Key_W,
+                    Qt::ControlModifier | Qt::ShiftModifier);
+    QVERIFY(fw->isWaterfallEnabled());
+    QTest::keyClick(&viewer, Qt::Key_W,
+                    Qt::ControlModifier | Qt::ShiftModifier);
+    QVERIFY(!fw->isWaterfallEnabled());
+
+    QTest::keyClick(&viewer, Qt::Key_O,
+                    Qt::ControlModifier | Qt::ShiftModifier);
+    QVERIFY(fw->isShowOutlinePoints());
+    QTest::keyClick(&viewer, Qt::Key_O,
+                    Qt::ControlModifier | Qt::ShiftModifier);
+    QVERIFY(!fw->isShowOutlinePoints());
+
+    const int initial_pt = fw->getCurrentFontSize();
+    QTest::keyClick(&viewer, Qt::Key_Equal, Qt::ControlModifier);
+    QVERIFY(fw->getCurrentFontSize() > initial_pt);
+    QTest::keyClick(&viewer, Qt::Key_Minus, Qt::ControlModifier);
+    QCOMPARE(fw->getCurrentFontSize(), initial_pt);
+
+    QTest::keyClick(&viewer, Qt::Key_2, Qt::ControlModifier);
+    QCOMPARE(tabs->currentIndex(), 1);
+    QTest::keyClick(&viewer, Qt::Key_3, Qt::ControlModifier);
+    QCOMPARE(tabs->currentIndex(), 2);
+    QTest::keyClick(&viewer, Qt::Key_4, Qt::ControlModifier);
+    QCOMPARE(tabs->currentIndex(), 3);
+    QTest::keyClick(&viewer, Qt::Key_1, Qt::ControlModifier);
+    QCOMPARE(tabs->currentIndex(), 0);
+
+    // OpenType Reset action triggers when an override is active.
+    const auto pills = fw->featurePillButtons();
+    if (!pills.isEmpty()) {
+        const QByteArray tag = pills.first()->text().left(4).toLatin1();
+        const bool was_on    = fw->isFeatureEnabled(tag);
+        fw->setFeatureEnabled(tag, !was_on);
+        QCOMPARE(fw->isFeatureEnabled(tag), !was_on);
+        QTest::keyClick(&viewer, Qt::Key_R,
+                        Qt::ControlModifier | Qt::ShiftModifier);
+        QCOMPARE(fw->isFeatureEnabled(tag), was_on);
+    }
+
+    // Copy as Image shortcut (Ctrl+Shift+C) populates clipboard.
+    QApplication::clipboard()->clear();
+    QTest::keyClick(&viewer, Qt::Key_C,
+                    Qt::ControlModifier | Qt::ShiftModifier);
+    QVERIFY(!QApplication::clipboard()->pixmap().isNull());
+
+    // While FontPreviewEdit has focus, a bare-letter override ("I") must be
+    // accepted by the editor as text input instead of toggling Invert.
+    const QString before_text = edit->toPlainText();
+    edit->setFocus(Qt::MouseFocusReason);
+    QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(edit));
+    QTest::keyClick(edit, Qt::Key_I);
+    QApplication::processEvents();
+    QVERIFY(!fw->isInvertPreview());
+    QVERIFY(edit->toPlainText() != before_text);
+}
+
+void ViewerTest::getContentSizeIgnoresPluginCmdAndScalesDpr()
+{
+    const QString font_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!font_path.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString ini_path = dir.filePath(QStringLiteral("fontviewer.ini"));
+
+    ViewOptionsPrivate d;
+    d.path                                   = font_path;
+    d.dpr                                    = 1.5;
+    d.extras[ViewOptionsKeys::kKeyPluginCmd] = QStringList{"-p", "50"};
+    ViewOptions opts;
+    opts.d_ptr = &d;
+
+    TestFontViewer viewer(ini_path);
+    viewer.load(nullptr, &opts);
+    QCOMPARE(viewer.getContentSize(), QSize(qRound(850 * 1.5), 800 * 1.5));
+}
+
+void ViewerTest::glyphInspectorSmallDescentAndNarrowViewportNoOverlapOrOverflow()
+{
+    const QString font_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!font_path.isEmpty());
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(font_path));
+    const FontDecorationMetrics deco = engine.decorationMetrics(0);
+
+    // Narrow scroll area (320px wide, forced vertical scrollbar) must not
+    // overflow horizontally when displaying long CJK Unicode block text.
+    QScrollArea sa;
+    sa.setWidgetResizable(true);
+    sa.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    auto *gi = new GlyphInspectorWidget(&sa);
+    sa.setWidget(gi);
+    sa.resize(320, 460);
+    sa.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&sa));
+
+    QFont ft(QStringLiteral("Roboto"));
+    ft.setPointSize(16);
+    gi->updateGlyph(QChar(0x2F00), ft, font_path, deco);
+    QApplication::processEvents();
+    QApplication::processEvents();
+    QCOMPARE(sa.horizontalScrollBar()->maximum(), 0);
+
+    // Stress-test baseline + descent near each other at minimum preview size
+    // with a font that has small/zero descent (using a space / tiny bbox).
+    GlyphPreviewWidget preview;
+    preview.resize(preview.minimumSize());
+    preview.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&preview));
+
+    ft.setPointSize(16);
+    preview.setGlyphData(QChar('A'), ft, QRectF(0, -12, 10, 12), 12.0, deco);
+    preview.repaint();
+    const QVector<QRectF> rects = preview.lastLabelRects();
+    QVERIFY(!rects.isEmpty());
+    const QRectF bounds(preview.rect());
+    for (int i = 0; i < rects.size(); ++i) {
+        QVERIFY(bounds.contains(rects[i]));
+        for (int j = i + 1; j < rects.size(); ++j) {
+            QVERIFY(!rects[i].intersects(rects[j]));
+        }
+    }
+
+    // Standard size: underline (negative underline_pos) must remain strictly
+    // below baseline and never jump above baseline's line or invert order.
+    QVERIFY(deco.has_underline && deco.underline_pos < 0);
+    preview.resize(400, 360);
+    QApplication::processEvents();
+    preview.repaint();
+    const QVector<QRectF> wide_rects = preview.lastLabelRects();
+    const QStringList wide_texts     = preview.lastLabelTexts();
+    QCOMPARE(wide_rects.size(), wide_texts.size());
+    int baseline_idx  = -1;
+    int underline_idx = -1;
+    int descent_idx   = -1;
+    for (int i = 0; i < wide_texts.size(); ++i) {
+        if (wide_texts[i] == QLatin1String("baseline")) {
+            baseline_idx = i;
+        }
+        else if (wide_texts[i].startsWith(QLatin1String("underline"))) {
+            underline_idx = i;
+        }
+        else if (wide_texts[i] == QLatin1String("descent")) {
+            descent_idx = i;
+        }
+    }
+    QVERIFY(baseline_idx >= 0 && underline_idx >= 0 && descent_idx >= 0);
+    QVERIFY2(wide_rects[baseline_idx].bottom()
+                 <= wide_rects[underline_idx].top(),
+             qPrintable(QString("baseline=(%1..%2) underline=(%3..%4)")
+                            .arg(wide_rects[baseline_idx].top())
+                            .arg(wide_rects[baseline_idx].bottom())
+                            .arg(wide_rects[underline_idx].top())
+                            .arg(wide_rects[underline_idx].bottom())));
+    QVERIFY2(wide_rects[underline_idx].top()
+                 >= preview.lastUnderlineBand().top(),
+             qPrintable(QString("underline=(%1..%2) bandTop=%3")
+                            .arg(wide_rects[underline_idx].top())
+                            .arg(wide_rects[underline_idx].bottom())
+                            .arg(preview.lastUnderlineBand().top())));
+    QVERIFY2(wide_rects[descent_idx].top() > wide_rects[baseline_idx].bottom(),
+             qPrintable(QString("descent=(%1..%2) baseline=(%3..%4) "
+                                "underline=(%5..%6)")
+                            .arg(wide_rects[descent_idx].top())
+                            .arg(wide_rects[descent_idx].bottom())
+                            .arg(wide_rects[baseline_idx].top())
+                            .arg(wide_rects[baseline_idx].bottom())
+                            .arg(wide_rects[underline_idx].top())
+                            .arg(wide_rects[underline_idx].bottom())));
+    for (int i = 0; i < wide_rects.size(); ++i) {
+        QVERIFY(QRectF(preview.rect()).contains(wide_rects[i]));
+        for (int j = i + 1; j < wide_rects.size(); ++j) {
+            QVERIFY(!wide_rects[i].intersects(wide_rects[j]));
+        }
+    }
+}
+
+void ViewerTest::uiUsesDefaultCursorNoCjkPresetAndGroupsTypography()
+{
+    const QString roboto_vf = fixturePath("Roboto-VariableFont_wdth,wght.ttf");
+    QVERIFY(!roboto_vf.isEmpty());
+
+    FontWidget view;
+    QVERIFY(view.init(roboto_vf));
+    view.resize(850, 800);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    // No button should alter the hover cursor to PointingHandCursor.
+    const auto buttons = view.findChildren<QPushButton *>();
+    QVERIFY(!buttons.isEmpty());
+    for (const QPushButton *btn : buttons) {
+        QCOMPARE(btn->cursor().shape(), Qt::ArrowCursor);
+    }
+
+    // Preset combobox must not contain the non-universal CJK preset and must be
+    // wide enough to show its longest item without truncation.
+    QComboBox *presets = nullptr;
+    for (QComboBox *cb : view.findChildren<QComboBox *>()) {
+        if (cb->findText(QStringLiteral("Paragraph")) >= 0) {
+            presets = cb;
+            break;
+        }
+    }
+    QVERIFY(presets != nullptr);
+    QCOMPARE(presets->findText(QStringLiteral("CJK Mixed")), -1);
+    const int digits_idx = presets->findText(QStringLiteral("Digits & Symbols"));
+    QVERIFY(digits_idx >= 0);
+    QVERIFY(presets->width()
+            >= presets->fontMetrics().horizontalAdvance(
+                   QStringLiteral("Digits & Symbols"))
+                   + 36);
+
+    // Variable axes and OpenType features share the Typography group box,
+    // which collapses cleanly with the top header section.
+    auto *axes = view.findChild<VariableAxesBar *>();
+    auto *feat = view.findChild<OpenTypeFeaturesBar *>();
+    QVERIFY(axes != nullptr);
+    QVERIFY(feat != nullptr);
+    auto *group = qobject_cast<QGroupBox *>(axes->parentWidget());
+    QVERIFY(group != nullptr);
+    QCOMPARE(feat->parentWidget(), static_cast<QWidget *>(group));
+    QCOMPARE(group->title(), QStringLiteral("Typography"));
+    QVERIFY(group->isVisible());
+
+    view.setCollapsed(true);
+    QApplication::processEvents();
+    QVERIFY(!group->isVisible());
+    // Collapsed header shows family, weight/style, and current point size.
+    QLabel *collapsed_lbl = nullptr;
+    for (QLabel *lbl : view.findChildren<QLabel *>()) {
+        if (lbl->isVisible() && lbl->alignment().testFlag(Qt::AlignCenter)
+            && lbl->font().bold()
+            && lbl->text().contains(QStringLiteral("pt"))) {
+            collapsed_lbl = lbl;
+            break;
+        }
+    }
+    QVERIFY(collapsed_lbl != nullptr);
+    QVERIFY(collapsed_lbl->text().contains(QStringLiteral("400")));
+    QVERIFY(collapsed_lbl->text().contains(QStringLiteral("16 pt")));
+    view.setCurrentFontSize(24);
+    view.setVariableAxisValue(QByteArrayLiteral("wght"), 650.0f);
+    QApplication::processEvents();
+    QVERIFY(collapsed_lbl->text().contains(QStringLiteral("650")));
+    QVERIFY(collapsed_lbl->text().contains(QStringLiteral("24 pt")));
+    view.setCurrentFontSize(16);
+    view.setVariableAxisValue(QByteArrayLiteral("wght"), 400.0f);
+
+    view.setCollapsed(false);
+    QApplication::processEvents();
+    QVERIFY(group->isVisible());
+
+    // Text toolbar Reset restores preview parameters while keeping text and
+    // preset, without changing toolbar height.
+    auto *text_tab = view.findChild<TextPreviewTab *>();
+    QVERIFY(text_tab != nullptr);
+    auto *edit_box       = text_tab->findChild<FontPreviewEdit *>();
+    auto *waterfall_area = text_tab->findChild<QScrollArea *>();
+    QVERIFY(edit_box != nullptr && waterfall_area != nullptr);
+    QVERIFY(edit_box->verticalScrollBar()->property("is_readonly").toBool());
+    QVERIFY(edit_box->horizontalScrollBar()->property("is_readonly").toBool());
+    QVERIFY(waterfall_area->verticalScrollBar()
+                ->property("is_readonly")
+                .toBool());
+    QVERIFY(waterfall_area->horizontalScrollBar()
+                ->property("is_readonly")
+                .toBool());
+    QPushButton *reset_text_btn = nullptr;
+    for (QPushButton *b : text_tab->findChildren<QPushButton *>()) {
+        if (b->text() == QLatin1String("Reset")) {
+            reset_text_btn = b;
+            break;
+        }
+    }
+    QVERIFY(reset_text_btn != nullptr);
+    QVERIFY(!reset_text_btn->isVisible());
+
+    QWidget *toolbar = presets->parentWidget();
+    QVERIFY(toolbar != nullptr);
+    const int tb_h_before = toolbar->height();
+    const int para_idx    = presets->findText(QStringLiteral("Paragraph"));
+    QVERIFY(para_idx >= 0);
+    presets->setCurrentIndex(para_idx);
+    QApplication::processEvents();
+    // Changing preset/text alone does not trigger parameter Reset.
+    QVERIFY(!reset_text_btn->isVisible());
+
+    view.setInvertPreview(true);
+    view.setWaterfallEnabled(true);
+    view.setLineHeight(2.0);
+    view.setLetterSpacing(3.0);
+    QApplication::processEvents();
+    QVERIFY(reset_text_btn->isVisible());
+    QCOMPARE(toolbar->height(), tb_h_before);
+    QSlider *height_slider = nullptr;
+    for (QSlider *s : text_tab->findChildren<QSlider *>()) {
+        if (s->maximum() == 25) {
+            height_slider = s;
+            break;
+        }
+    }
+    QVERIFY(height_slider != nullptr);
+    QVERIFY(!height_slider->isEnabled());
+
+    reset_text_btn->click();
+    QApplication::processEvents();
+    QVERIFY(!reset_text_btn->isVisible());
+    QVERIFY(!view.isInvertPreview());
+    QVERIFY(!view.isWaterfallEnabled());
+    QVERIFY(height_slider->isEnabled());
+    QCOMPARE(view.getLineHeight(), 1.4);
+    QCOMPARE(view.getLetterSpacing(), 0.0);
+    QCOMPARE(presets->currentText(), QStringLiteral("Paragraph"));
+    QCOMPARE(toolbar->height(), tb_h_before);
+}
+
+void ViewerTest::featurePillsLightModeContrastAndCheckedIndicator()
+{
+    const QString roboto_vf = fixturePath("Roboto-VariableFont_wdth,wght.ttf");
+    QVERIFY(!roboto_vf.isEmpty());
+
+    FontWidget view;
+    QVERIFY(view.init(roboto_vf));
+
+    // Mirror Host MaterialStyle light palette where QPalette::Button is
+    // transparent (0, 0, 0, 0). Unchecked pills must remain light/neutral.
+    QPalette light = makeThemePalette(false);
+    light.setColor(QPalette::All, QPalette::Window, QColor(0xFF, 0xFF, 0xFF));
+    light.setColor(QPalette::All, QPalette::WindowText, QColor(0x21, 0x21, 0x21));
+    light.setColor(QPalette::All, QPalette::Button, QColor(0, 0, 0, 0));
+    light.setColor(QPalette::All, QPalette::Highlight, QColor(0x00, 0x6F, 0xA8));
+    light.setColor(QPalette::All, QPalette::HighlightedText, QColor(0xFF, 0xFF, 0xFF));
+    view.setPalette(light);
+    view.updateTheme(0);
+    view.resize(850, 800);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    QPushButton *pill = nullptr;
+    for (QPushButton *b : view.featurePillButtons()) {
+        if (!b->isChecked()) {
+            pill = b;
+            break;
+        }
+    }
+    QVERIFY(pill != nullptr);
+
+    const QImage unchecked_img = pill->grab().toImage();
+    QVERIFY(!unchecked_img.isNull());
+    auto *feat = view.findChild<OpenTypeFeaturesBar *>();
+    QVERIFY(feat != nullptr);
+    // Sample near left-inside of unchecked pill; lightness must be high (>210),
+    // not muddy dark gray caused by QPalette::Button alpha(130).
+    const QColor unchecked_bg
+        = unchecked_img.pixelColor(unchecked_img.width() / 2, 4);
+    QVERIFY2(unchecked_bg.lightness() > 210,
+             qPrintable(QString("Unexpected dark pill fill lightness: %1")
+                            .arg(unchecked_bg.lightness())));
+
+    const int bar_h_before  = feat->height();
+    const int pill_y_before = pill->mapTo(&view, QPoint(0, 0)).y();
+
+    pill->setChecked(true);
+    QApplication::processEvents();
+    const int bar_h_after  = feat->height();
+    const int pill_y_after = pill->mapTo(&view, QPoint(0, 0)).y();
+    QCOMPARE(bar_h_after, bar_h_before);
+    QCOMPARE(pill_y_after, pill_y_before);
+
+    const QImage checked_img = pill->grab().toImage();
+    QVERIFY(checked_img != unchecked_img);
+    // Checked pill draws a subtle accent badge on the left (near accent hue).
+    bool saw_accent = false;
+    for (int y = 0; y < checked_img.height() && !saw_accent; ++y) {
+        for (int x = 0; x < checked_img.width() / 2; ++x) {
+            const QColor c = checked_img.pixelColor(x, y);
+            if (c.blue() > c.red() + 40) {
+                saw_accent = true;
+                break;
+            }
+        }
+    }
+    QVERIFY(saw_accent);
+}
+
+void ViewerTest::dprScalingUpdatesLayoutMetricsAndIcons()
+{
+    const QString roboto_vf = fixturePath("Roboto-VariableFont_wdth,wght.ttf");
+    QVERIFY(!roboto_vf.isEmpty());
+
+    FontWidget view;
+    QVERIFY(view.init(roboto_vf));
+    view.resize(850, 800);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    auto *cw   = view.findChild<CharacterWidget *>();
+    auto *gi   = view.findChild<GlyphInspectorWidget *>();
+    auto *feat = view.findChild<OpenTypeFeaturesBar *>();
+    QVERIFY(cw != nullptr && gi != nullptr && feat != nullptr);
+    auto *preview = gi->previewWidget();
+    QVERIFY(preview != nullptr);
+
+    QPushButton *copy_btn = nullptr;
+    for (QPushButton *b : view.findChildren<QPushButton *>()) {
+        if (b->toolTip().startsWith(QStringLiteral("Copy as Image"))) {
+            copy_btn = b;
+            break;
+        }
+    }
+    QVERIFY(copy_btn != nullptr);
+
+    const int margin_1x = view.layout()->contentsMargins().left();
+    const int cw_w_1x   = static_cast<QWidget *>(cw)->sizeHint().width();
+    const int min_pv_1x = preview->minimumWidth();
+    const int btn_1x    = copy_btn->width();
+    const int icon_1x   = copy_btn->iconSize().width();
+
+    view.updateDPR(2.0);
+    QApplication::processEvents();
+
+    QCOMPARE(view.layout()->contentsMargins().left(), margin_1x * 2);
+    QCOMPARE(preview->minimumWidth(), min_pv_1x * 2);
+    QCOMPARE(copy_btn->width(), btn_1x * 2);
+    QCOMPARE(copy_btn->iconSize().width(), icon_1x * 2);
+    QVERIFY(static_cast<QWidget *>(cw)->sizeHint().width() >= cw_w_1x);
+}
+
+void ViewerTest::iniPresetsSeedLoadElideAndPreserveUserText()
+{
+    const QString font_path = fixturePath("Roboto-VariableFont_wdth,wght.ttf");
+    QVERIFY(!font_path.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString ini_path = dir.filePath(QStringLiteral("fontviewer.ini"));
+
+    auto find_preset_combo = [](QObject *root) -> QComboBox * {
+        for (QComboBox *cb : root->findChildren<QComboBox *>()) {
+            if (cb->findText(QStringLiteral("Paragraph")) >= 0) {
+                return cb;
+            }
+        }
+        return nullptr;
+    };
+
+    int min_w_builtin = 0;
+    // 1. Fresh INI: seeds the 3 default example presets into [Presets] and
+    //    appends them below a separator without widening the combobox.
+    {
+        ViewOptionsPrivate d;
+        d.path = font_path;
+        ViewOptions opts;
+        opts.d_ptr = &d;
+
+        TestFontViewer viewer(ini_path);
+        viewer.load(nullptr, &opts);
+        auto *fw = viewer.findChild<FontWidget *>();
+        QVERIFY(fw != nullptr);
+
+        QComboBox *presets = find_preset_combo(fw);
+        QVERIFY(presets != nullptr);
+        QCOMPARE(presets->count(), 7);
+        QCOMPARE(presets->itemData(3, Qt::UserRole + 1).toInt(), 3);
+        QVERIFY(presets->findText(QStringLiteral("Albus_Dumbledore")) >= 4);
+        QVERIFY(presets->findText(QStringLiteral("Best_App")) >= 4);
+        QVERIFY(presets->findText(QStringLiteral("BoJack")) >= 4);
+        min_w_builtin = presets->minimumWidth();
+        QVERIFY(min_w_builtin > 0);
+    }
+    {
+        QFile raw_ini(ini_path);
+        QVERIFY(raw_ini.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString raw_text = QString::fromUtf8(raw_ini.readAll());
+        QVERIFY(!raw_text.contains(QStringLiteral("%20")));
+        QVERIFY(!raw_text.contains(QStringLiteral("\\\"")));
+
+        QSettings check(ini_path, QSettings::IniFormat);
+        QCOMPARE(
+            check.value(QStringLiteral("Presets/BoJack")).toString(),
+            QStringLiteral(
+                "\u201CIn this terrifying world all we have are the "
+                "connections that we make.\u201D\n- BoJack"));
+        QCOMPARE(
+            check.value(QStringLiteral("Presets/Albus_Dumbledore")).toString(),
+            QStringLiteral(
+                "\u201CHappiness can be found, even in the darkest of times, "
+                "if one only remembers to turn on the light.\u201D\n- Albus "
+                "Dumbledore"));
+        QCOMPARE(
+            check.value(QStringLiteral("Presets/Best_App")).toString(),
+            QStringLiteral("Seer is the best app in this universe. \U0001F680"));
+    }
+
+    // 2. Populated [Presets]: empty/whitespace skipped, \\n unescaped, commas
+    //    intact, oversized key elided with tooltip, content capped at
+    //    kMaxPasteChars, long keys do not widen combobox, and Last used /
+    //    user_text is preserved when selecting a custom preset.
+    const QString long_key
+        = QStringLiteral("VeryLongCustomPresetTitleExceedingLimit");
+    QVERIFY(long_key.size() > 20);
+    {
+        QSettings seed(ini_path, QSettings::IniFormat);
+        seed.setValue(QStringLiteral("user_text"),
+                      QStringLiteral("kept custom text"));
+        seed.beginGroup(QStringLiteral("Presets"));
+        seed.remove(QStringLiteral(""));
+        seed.setValue(QStringLiteral("custom_1"), QString());
+        seed.setValue(QStringLiteral("blank"), QStringLiteral("   "));
+        seed.setValue(QStringLiteral("CJK"), QStringLiteral("永\\n和"));
+        seed.setValue(QStringLiteral("CommaLine"),
+                      QStringLiteral("Alpha, Beta, Gamma"));
+        seed.setValue(long_key, QStringLiteral("Long key test"));
+        seed.setValue(
+            QStringLiteral("TooLong"),
+            QString(FontPreviewEdit::kMaxPasteChars + 123, QLatin1Char('x')));
+        seed.endGroup();
+        seed.sync();
+    }
+
+    int min_w_last_used_no_custom = 0;
+    {
+        QSettings empty_presets(dir.filePath(QStringLiteral("empty.ini")),
+                                QSettings::IniFormat);
+        TextPreviewTab probe;
+        probe.loadPresets(empty_presets);
+        probe.setCurrentText(QStringLiteral("kept custom text"));
+        QComboBox *probe_cb = probe.findChild<QComboBox *>();
+        QVERIFY(probe_cb != nullptr);
+        min_w_last_used_no_custom = probe_cb->minimumWidth();
+    }
+
+    {
+        ViewOptionsPrivate d;
+        d.path = font_path;
+        ViewOptions opts;
+        opts.d_ptr = &d;
+
+        TestFontViewer viewer(ini_path);
+        viewer.load(nullptr, &opts);
+        auto *fw       = viewer.findChild<FontWidget *>();
+        auto *text_tab = fw ? fw->findChild<TextPreviewTab *>() : nullptr;
+        QVERIFY(fw != nullptr && text_tab != nullptr);
+
+        QComboBox *presets = find_preset_combo(text_tab);
+        QVERIFY(presets != nullptr);
+
+        // Long custom key must not widen combobox beyond built-in + Last used.
+        QCOMPARE(presets->minimumWidth(), min_w_last_used_no_custom);
+        QVERIFY(min_w_last_used_no_custom >= min_w_builtin);
+
+        // Expected items: Last used (0), 3 built-in (1..3), separator (4),
+        // 4 non-empty custom presets (5..8).
+        QCOMPARE(presets->count(), 9);
+        QCOMPARE(presets->itemData(0, Qt::UserRole + 1).toInt(), 1);
+        QCOMPARE(presets->itemData(4, Qt::UserRole + 1).toInt(), 3);
+
+        const int cjk_idx = presets->findText(QStringLiteral("CJK"));
+        QVERIFY(cjk_idx >= 5);
+        QCOMPARE(presets->itemData(cjk_idx, Qt::UserRole + 1).toInt(), 2);
+        QCOMPARE(presets->itemData(cjk_idx, Qt::UserRole).toString(),
+                 QStringLiteral("永\n和"));
+        QCOMPARE(presets->itemData(cjk_idx, Qt::ToolTipRole).toString(),
+                 QStringLiteral("CJK"));
+
+        const int comma_idx = presets->findText(QStringLiteral("CommaLine"));
+        QVERIFY(comma_idx >= 5);
+        QCOMPARE(presets->itemData(comma_idx, Qt::UserRole).toString(),
+                 QStringLiteral("Alpha, Beta, Gamma"));
+
+        int long_idx = -1;
+        for (int i = 5; i < presets->count(); ++i) {
+            if (presets->itemData(i, Qt::ToolTipRole).toString() == long_key) {
+                long_idx = i;
+                break;
+            }
+        }
+        QVERIFY(long_idx >= 5);
+        const QString elided = presets->itemText(long_idx);
+        QCOMPARE(elided.size(), 20);
+        QVERIFY(elided.endsWith(QChar(0x2026)));
+        QCOMPARE(presets->itemData(long_idx, Qt::UserRole).toString(),
+                 QStringLiteral("Long key test"));
+
+        const int too_long_idx = presets->findText(QStringLiteral("TooLong"));
+        QVERIFY(too_long_idx >= 5);
+        QCOMPARE(presets->itemData(too_long_idx, Qt::UserRole).toString().size(),
+                 FontPreviewEdit::kMaxPasteChars);
+
+        // Selecting CJK preset via popup QMenu updates preview without
+        // overwriting user_text, preserves '&' without mnemonics, and
+        // includes a real QMenu separator before custom items.
+        presets->showPopup();
+        auto *popup_menu = presets->findChild<QMenu *>();
+        QVERIFY(popup_menu != nullptr);
+        QVERIFY(popup_menu->isVisible());
+        const QList<QAction *> acts = popup_menu->actions();
+        QCOMPARE(acts.size(), 9);
+        QVERIFY(acts[4]->isSeparator());
+        QCOMPARE(acts[3]->text(), QStringLiteral("Digits && Symbols"));
+        QVERIFY(acts[0]->isChecked());
+        acts[cjk_idx]->trigger();
+        presets->hidePopup();
+
+        auto *edit = text_tab->findChild<FontPreviewEdit *>();
+        QVERIFY(edit != nullptr);
+        QCOMPARE(edit->toPlainText(), QStringLiteral("永\n和"));
+        QCOMPARE(fw->getLastEditedText(), QStringLiteral("kept custom text"));
+
+        // Re-loading [Presets] replaces custom items cleanly (no dup separator).
+        QSettings reload_ini(dir.filePath(QStringLiteral("reload.ini")),
+                             QSettings::IniFormat);
+        reload_ini.setValue(QStringLiteral("Presets/OnlyOne"),
+                            QStringLiteral("Single"));
+        reload_ini.sync();
+        text_tab->loadPresets(reload_ini);
+        QCOMPARE(presets->count(), 6);
+        QCOMPARE(presets->itemData(4, Qt::UserRole + 1).toInt(), 3);
+        QCOMPARE(presets->itemText(5), QStringLiteral("OnlyOne"));
+    }
+
+    {
+        QSettings check(ini_path, QSettings::IniFormat);
+        QCOMPARE(check.value(QStringLiteral("user_text")).toString(),
+                 QStringLiteral("kept custom text"));
+    }
+}
+
+void ViewerTest::toolbarReflowsWhenResetTogglesAndAvoidsDanglingPresetSeparator()
+{
+    const QString font_path = fixtureFont();
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    FontWidget view;
+    QVERIFY(view.init(font_path));
+    auto *text_tab = view.findChild<TextPreviewTab *>();
+    QVERIFY(text_tab != nullptr);
+
+    QPushButton *aa_btn = nullptr;
+    QPushButton *reset_btn = nullptr;
+    for (QPushButton *btn : text_tab->findChildren<QPushButton *>()) {
+        if (btn->text() == QLatin1String("Aa")) {
+            aa_btn = btn;
+        }
+        else if (btn->text() == QLatin1String("Reset")) {
+            reset_btn = btn;
+        }
+    }
+    QVERIFY(aa_btn != nullptr && reset_btn != nullptr);
+    QWidget *toolbar = aa_btn->parentWidget();
+    QVERIFY(toolbar != nullptr);
+
+    // Pick a window width where the inline toolbar fits WITHOUT the Reset
+    // button, but overflows once Reset becomes visible.
+    view.resize(900, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    const int inline_w_no_reset = toolbar->sizeHint().width();
+    QVERIFY(!aa_btn->isVisible());
+    QVERIFY(!reset_btn->isVisible());
+
+    view.setInvertPreview(true);
+    QApplication::processEvents();
+    const int inline_w_with_reset = toolbar->sizeHint().width();
+    QVERIFY(inline_w_with_reset > inline_w_no_reset);
+    view.setInvertPreview(false);
+    QApplication::processEvents();
+
+    const int boundary_tab_w = (inline_w_no_reset + inline_w_with_reset) / 2;
+    const int chrome_dx      = view.width() - text_tab->width();
+    view.resize(boundary_tab_w + chrome_dx, 600);
+    QApplication::processEvents();
+    QVERIFY(!aa_btn->isVisible());
+    QVERIFY(!reset_btn->isVisible());
+
+    // Enabling a custom parameter makes Reset visible, so the toolbar must
+    // collapse Height/Spacing into Aa instead of clipping children.
+    view.setInvertPreview(true);
+    QApplication::processEvents();
+    QVERIFY(reset_btn->isVisible());
+    QVERIFY(aa_btn->isVisible());
+    for (QWidget *w : toolbar->findChildren<QWidget *>(
+             QString(), Qt::FindDirectChildrenOnly)) {
+        if (w->isVisible()) {
+            QVERIFY(w->geometry().right() < toolbar->width());
+        }
+    }
+
+    // Clicking Reset hides Reset and expands the toolbar back inline.
+    reset_btn->click();
+    QApplication::processEvents();
+    QVERIFY(!reset_btn->isVisible());
+    QVERIFY(!aa_btn->isVisible());
+
+    // Pre-show custom state and DPR scaling must both feed current hints into
+    // TextToolbar::sizeHint().
+    {
+        FontWidget hidden_view;
+        QVERIFY(hidden_view.init(font_path));
+        auto *hidden_tab = hidden_view.findChild<TextPreviewTab *>();
+        QVERIFY(hidden_tab != nullptr);
+        QPushButton *hidden_aa = nullptr;
+        for (QPushButton *b : hidden_tab->findChildren<QPushButton *>()) {
+            if (b->text() == QLatin1String("Aa")) {
+                hidden_aa = b;
+                break;
+            }
+        }
+        QVERIFY(hidden_aa != nullptr);
+        QWidget *hidden_tb = hidden_aa->parentWidget();
+        QVERIFY(hidden_tb != nullptr);
+        const int w_default = hidden_tb->sizeHint().width();
+        hidden_view.setInvertPreview(true);
+        const int w_with_reset = hidden_tb->sizeHint().width();
+        QVERIFY(w_with_reset > w_default);
+        hidden_view.updateDPR(2.0);
+        QVERIFY(hidden_tb->sizeHint().width() > w_with_reset);
+    }
+
+    // Blank custom presets must not leave a trailing separator in the combo.
+    QComboBox *presets = nullptr;
+    for (QComboBox *cb : text_tab->findChildren<QComboBox *>()) {
+        if (cb->findText(QStringLiteral("Paragraph")) >= 0) {
+            presets = cb;
+            break;
+        }
+    }
+    QVERIFY(presets != nullptr);
+    const int base_count = presets->count();
+    text_tab->setCustomPresets({
+        {QStringLiteral("   "), QStringLiteral("valid")},
+        {QStringLiteral("Blank"), QStringLiteral("   \n  ")},
+    });
+    QCOMPARE(presets->count(), base_count);
+    QVERIFY(presets->itemData(presets->count() - 1, Qt::UserRole + 1).toInt()
+            != 3);
+}
+
+void ViewerTest::openTypeFeatureParserBoundsEmptyScriptLangAndOobOffsets()
+{
+    const QString base_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!base_path.isEmpty());
+    QFile f(base_path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QByteArray base_bytes = f.readAll();
+
+    // Build a GSUB table with 4,000 staggered scripts having langSysCount = 0
+    // and out-of-bounds defaultLangSys offsets, plus a valid script "latn".
+    constexpr int kScripts = 4000;
+    QByteArray feature_list;
+    appendU16(feature_list, 1);
+    feature_list.append("liga", 4);
+    appendU16(feature_list, 8);
+    appendU16(feature_list, 0);
+    appendU16(feature_list, 0);
+
+    QByteArray valid_script;
+    appendU16(valid_script, 4);     // defaultLangSysOffset
+    appendU16(valid_script, 0);     // langSysCount = 0
+    appendU16(valid_script, 0);     // lookupOrderOffset
+    appendU16(valid_script, 0);     // requiredFeatureIndex = 0 ("liga")
+    appendU16(valid_script, 0);     // featureCount = 0
+
+    constexpr quint16 kScriptListOff = 10;
+    const int script_list_hdr        = 2 + kScripts * 6;
+    const quint16 kValidScriptRel    = quint16(script_list_hdr);
+    const quint16 kPoolRel
+        = quint16(script_list_hdr + valid_script.size());
+
+    QByteArray script_list;
+    appendU16(script_list, kScripts);
+    script_list.append("latn", 4);
+    appendU16(script_list, kValidScriptRel);
+    for (int s = 1; s < kScripts; ++s) {
+        script_list.append("latn", 4);
+        appendU16(script_list, quint16(kPoolRel + (s - 1) * 4));
+    }
+    script_list.append(valid_script);
+    for (int s = 1; s < kScripts; ++s) {
+        // Out-of-bounds defaultLangSysOffset (0xFFFE) and langSysCount = 0.
+        appendU16(script_list, 0xFFFE);
+        appendU16(script_list, 0);
+    }
+
+    const quint16 feature_list_off = quint16(kScriptListOff + script_list.size());
+    const quint16 lookup_list_off
+        = quint16(feature_list_off + feature_list.size());
+
+    QByteArray gsub;
+    appendU16(gsub, 1);
+    appendU16(gsub, 0);
+    appendU16(gsub, kScriptListOff);
+    appendU16(gsub, feature_list_off);
+    appendU16(gsub, lookup_list_off);
+    gsub.append(script_list);
+    gsub.append(feature_list);
+    appendU16(gsub, 0);
+
+    QByteArray empty_gpos;
+    appendU16(empty_gpos, 1);
+    appendU16(empty_gpos, 0);
+    appendU16(empty_gpos, 10);
+    appendU16(empty_gpos, 12);
+    appendU16(empty_gpos, 14);
+    appendU16(empty_gpos, 0);
+    appendU16(empty_gpos, 0);
+    appendU16(empty_gpos, 0);
+
+    const QByteArray synth_ttf = buildSyntheticSfntWithTables(
+        base_bytes, {{"GSUB", gsub}, {"GPOS", empty_gpos}});
+    QVERIFY(!synth_ttf.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString synth_path = dir.filePath(QStringLiteral("oob_ot.ttf"));
+    QFile out_file(synth_path);
+    QVERIFY(out_file.open(QIODevice::WriteOnly));
+    QCOMPARE(out_file.write(synth_ttf), qint64(synth_ttf.size()));
+    out_file.close();
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(synth_path));
+    const auto &feats = engine.inspectFace(0).ot_features;
+    QCOMPARE(feats.size(), 1);
+    QCOMPARE(feats.first().tag, QByteArrayLiteral("liga"));
+}
+
+void ViewerTest::characterWidgetTooltipEscapesHtmlAndHidesOnEmptySpace()
+{
+    const QString font_path = fixturePath("Roboto-Regular.ttf");
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    CharacterWidget cw;
+    cw.init(font_path);
+    cw.updateFont(QFont(QStringLiteral("Roboto"), 16));
+    cw.resize(static_cast<const QWidget &>(cw).sizeHint() + QSize(80, 80));
+    cw.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&cw));
+
+    // Find '<' (0x3C) index in the grid by scanning rows.
+    const int sq = static_cast<const QWidget &>(cw).sizeHint().width() / 16;
+    QPoint lt_pt;
+    for (int row = 0; row < 20 && lt_pt.isNull(); ++row) {
+        for (int col = 0; col < 16; ++col) {
+            const QPoint pt(col * sq + sq / 2, row * sq + sq / 2);
+            QSignalSpy spy(&cw, &CharacterWidget::selectionChanged);
+            QMouseEvent press(QEvent::MouseButtonPress, pt, cw.mapToGlobal(pt),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(&cw, &press);
+            if (!spy.isEmpty() && spy.at(0).at(0).toChar() == QChar('<')) {
+                lt_pt = pt;
+                break;
+            }
+        }
+    }
+    QVERIFY(!lt_pt.isNull());
+
+    QMouseEvent move_lt(QEvent::MouseMove, lt_pt, cw.mapToGlobal(lt_pt),
+                        Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&cw, &move_lt);
+    QVERIFY(QToolTip::text().contains(QStringLiteral("&lt;")));
+    QVERIFY(!QToolTip::text().contains(QStringLiteral("\"><</span>")));
+
+    // Hovering past column 15 (empty space) must not show a 0x0 tooltip.
+    const QPoint empty_pt(16 * sq + 8, 8);
+    QMouseEvent move_empty(QEvent::MouseMove, empty_pt,
+                           cw.mapToGlobal(empty_pt), Qt::NoButton, Qt::NoButton,
+                           Qt::NoModifier);
+    QApplication::sendEvent(&cw, &move_empty);
+    QVERIFY(!QToolTip::text().contains(QStringLiteral("0x0")));
+}
+
+void ViewerTest::paletteChangeUpdatesToolbarIconsSeparatorAndEmptyLabel()
+{
+    const QString vf_path = fixturePath("Roboto-VariableFont_wdth,wght.ttf");
+    if (vf_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    FontWidget view;
+    QVERIFY(view.init(vf_path));
+    QPalette light_pal = makeThemePalette(false);
+    light_pal.setColor(QPalette::All, QPalette::Mid, QColor(0x70, 0x70, 0x70));
+    view.setPalette(light_pal);
+    view.updateTheme(0);
+    view.resize(850, 650);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    QPushButton *copy_btn = nullptr;
+    for (QPushButton *b : view.findChildren<QPushButton *>()) {
+        if (b->toolTip().startsWith(QStringLiteral("Copy as Image"))) {
+            copy_btn = b;
+            break;
+        }
+    }
+    QVERIFY(copy_btn != nullptr);
+    const QImage light_icon = copy_btn->icon().pixmap(14, 14).toImage();
+
+    auto *gi = view.findChild<GlyphInspectorWidget *>();
+    QVERIFY(gi != nullptr);
+    QLabel *empty_lbl = nullptr;
+    for (QLabel *lbl : gi->findChildren<QLabel *>()) {
+        if (lbl->text().contains(QStringLiteral("Select a character"))) {
+            empty_lbl = lbl;
+            break;
+        }
+    }
+    QVERIFY(empty_lbl != nullptr);
+    const QColor light_lbl_color = empty_lbl->palette().color(QPalette::WindowText);
+
+    QFrame *typo_sep = nullptr;
+    for (QFrame *f : view.findChildren<QFrame *>()) {
+        if (f->frameShape() == QFrame::HLine) {
+            typo_sep = f;
+            break;
+        }
+    }
+    QVERIFY(typo_sep != nullptr);
+    const QColor light_sep_color = typo_sep->palette().color(QPalette::WindowText);
+
+    // Switch only the widget palette to dark without calling updateTheme(1)
+    // explicitly: PaletteChange must update baked icons and custom-palette labels.
+    QPalette dark_pal = makeThemePalette(true);
+    dark_pal.setColor(QPalette::All, QPalette::Mid, QColor(0x88, 0x99, 0xAA));
+    view.setPalette(dark_pal);
+    QApplication::processEvents();
+
+    const QImage dark_icon = copy_btn->icon().pixmap(14, 14).toImage();
+    QVERIFY(dark_icon != light_icon);
+    QVERIFY(empty_lbl->palette().color(QPalette::WindowText) != light_lbl_color);
+    QCOMPARE(empty_lbl->palette().color(QPalette::WindowText),
+             QColor(0x88, 0x99, 0xAA));
+    QVERIFY(typo_sep->palette().color(QPalette::WindowText) != light_sep_color);
+}
+
+void ViewerTest::customPresetDoesNotWidenDropdownOrSplitSurrogateTitle()
+{
+    const QString font_path = fixtureFont();
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    FontWidget view;
+    QVERIFY(view.init(font_path));
+    view.resize(850, 600);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    auto *text_tab = view.findChild<TextPreviewTab *>();
+    QVERIFY(text_tab != nullptr);
+    QComboBox *presets = nullptr;
+    for (QComboBox *cb : text_tab->findChildren<QComboBox *>()) {
+        if (cb->findText(QStringLiteral("Paragraph")) >= 0) {
+            presets = cb;
+            break;
+        }
+    }
+    QVERIFY(presets != nullptr);
+    QPushButton *aa_btn = nullptr;
+    for (QPushButton *b : text_tab->findChildren<QPushButton *>()) {
+        if (b->text() == QLatin1String("Aa")) {
+            aa_btn = b;
+            break;
+        }
+    }
+    QVERIFY(aa_btn != nullptr);
+    QWidget *toolbar = aa_btn->parentWidget();
+    QVERIFY(toolbar != nullptr);
+
+    const int cb_w_before  = presets->width();
+    const int cb_sh_before = presets->sizeHint().width();
+    const int tb_sh_before = toolbar->sizeHint().width();
+
+    // A 20-char wide custom key and an overlong surrogate-containing key must
+    // neither widen the dropdown/toolbar nor leave a lone high surrogate.
+    QString surrogate_key(18, QLatin1Char('A'));
+    surrogate_key += QChar(0xD83D);
+    surrogate_key += QChar(0xDE00);
+    surrogate_key += QStringLiteral("tail");
+
+    text_tab->setCustomPresets({
+        {QString(20, QLatin1Char('W')), QStringLiteral("Wide title")},
+        {surrogate_key, QStringLiteral("Emoji title")},
+    });
+    QApplication::processEvents();
+
+    QCOMPARE(presets->sizeHint().width(), cb_sh_before);
+    QCOMPARE(presets->width(), cb_w_before);
+    QCOMPARE(toolbar->sizeHint().width(), tb_sh_before);
+
+    int emoji_idx = -1;
+    for (int i = 0; i < presets->count(); ++i) {
+        if (presets->itemData(i, Qt::ToolTipRole).toString() == surrogate_key) {
+            emoji_idx = i;
+            break;
+        }
+    }
+    QVERIFY(emoji_idx >= 0);
+    const QString elided = presets->itemText(emoji_idx);
+    QVERIFY(elided.endsWith(QChar(0x2026)));
+    const QString stem = elided.left(elided.size() - 1);
+    QVERIFY(!stem.isEmpty());
+    QVERIFY(!stem.at(stem.size() - 1).isHighSurrogate());
+}
+
+void ViewerTest::waterfallScrollsToNewlyInsertedLargeCustomSizeWhileVisible()
+{
+    const QString font_path = fixtureFont();
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    FontWidget view;
+    QVERIFY(view.init(font_path));
+    view.setCurrentFontSize(10);
+    view.setWaterfallEnabled(true);
+    view.resize(600, 300);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    auto *wf = view.findChild<WaterfallWidget *>();
+    QVERIFY(wf != nullptr);
+    auto *sa = qobject_cast<QScrollArea *>(wf->parentWidget()->parentWidget());
+    QVERIFY(sa != nullptr);
+    QCOMPARE(sa->verticalScrollBar()->value(), 0);
+
+    // Selecting a custom size larger than 72 pt grows the waterfall while
+    // already visible; the scroll bar must still settle on the new row.
+    view.setCurrentFontSize(120);
+    QTRY_VERIFY(wf->rowRect(120).isValid()
+                && wf->rowRect(120).bottom()
+                       <= sa->verticalScrollBar()->value()
+                              + sa->viewport()->height() + 8);
+}
+
+void ViewerTest::customShortcutCannotBreakFixedZoomShortcuts()
+{
+    const QString font_path = fixtureFont();
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString ini_path = dir.filePath(QStringLiteral("fontviewer.ini"));
+    {
+        QSettings seed(ini_path, QSettings::IniFormat);
+        seed.setValue(QStringLiteral("Shortcuts/save_svg"),
+                      QStringLiteral("Ctrl+="));
+        seed.setValue(QStringLiteral("Shortcuts/toggle_invert"),
+                      QStringLiteral("Ctrl+-"));
+        seed.sync();
+    }
+
+    ViewOptionsPrivate d;
+    d.path = font_path;
+    ViewOptions opts;
+    opts.d_ptr = &d;
+
+    TestFontViewer viewer(ini_path);
+    viewer.load(nullptr, &opts);
+    viewer.resize(800, 600);
+    viewer.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&viewer));
+    auto *fw = viewer.findChild<FontWidget *>();
+    QVERIFY(fw != nullptr);
+
+    QCOMPARE(fw->shortcutSequence(FontShortcutAction::SaveSvg),
+             FontShortcutMap::defaultSequence(FontShortcutAction::SaveSvg));
+    QCOMPARE(fw->shortcutSequence(FontShortcutAction::ToggleInvert),
+             FontShortcutMap::defaultSequence(FontShortcutAction::ToggleInvert));
+
+    const int before_pt = fw->getCurrentFontSize();
+    QTest::keyClick(&viewer, Qt::Key_Equal, Qt::ControlModifier);
+    QVERIFY(fw->getCurrentFontSize() > before_pt);
+    QTest::keyClick(&viewer, Qt::Key_Minus, Qt::ControlModifier);
+    QCOMPARE(fw->getCurrentFontSize(), before_pt);
 }
 
 QTEST_MAIN(ViewerTest)

@@ -11,6 +11,8 @@
 
 #include <algorithm>
 
+#include "fontui.h"
+
 namespace {
 constexpr qreal kOuterPadding = 8.0;
 constexpr qreal kRowPadding   = 6.0;
@@ -23,6 +25,17 @@ WaterfallWidget::WaterfallWidget(QWidget *parent) : QWidget(parent)
     setFocusPolicy(Qt::NoFocus);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
+}
+
+void WaterfallWidget::setDpr(qreal dpr)
+{
+    const qreal clamped = fontui::clampDpr(dpr);
+    if (qFuzzyCompare(m_dpr, clamped)) {
+        return;
+    }
+    m_dpr = clamped;
+    relayout();
+    update();
 }
 
 void WaterfallWidget::setFontProvider(FontProvider provider)
@@ -123,13 +136,12 @@ QColor WaterfallWidget::mutedTextColor() const
 {
     if (m_inverted) {
         QColor color = textColor();
-        color.setAlpha(160);
+        color.setAlpha(170);
         return color;
     }
     QColor color = palette().color(QPalette::PlaceholderText);
     if (!color.isValid()) {
-        color = textColor();
-        color.setAlpha(140);
+        return fontui::mutedTextColor(palette());
     }
     return color;
 }
@@ -153,15 +165,18 @@ void WaterfallWidget::relayout()
         m_label_width = qMax(m_label_width,
                              qreal(label_fm.horizontalAdvance(sizeLabel(pt))));
     }
-    m_label_width = qCeil(m_label_width) + 18.0;
+    m_label_width = qCeil(m_label_width) + fontui::dpf(18.0, m_dpr);
 
-    const qreal min_pill_row = qreal(label_fm.height()) + 12.0;
-    qreal y = kOuterPadding;
+    const qreal outer_pad = fontui::dpf(kOuterPadding, m_dpr);
+    const qreal row_pad   = fontui::dpf(kRowPadding, m_dpr);
+    const qreal min_row_h = fontui::dpf(kMinRowHeight, m_dpr);
+    const qreal min_pill_row
+        = qreal(label_fm.height()) + fontui::dpf(12.0, m_dpr);
+    qreal y = outer_pad;
     for (int pt : m_sizes) {
         QFontMetricsF fm(rowFont(pt), this);
         const qreal row_height
-            = qMax(qMax(kMinRowHeight, min_pill_row),
-                   fm.height() + kRowPadding * 2.0);
+            = qMax(qMax(min_row_h, min_pill_row), fm.height() + row_pad * 2.0);
         Row row;
         row.pt   = pt;
         row.rect = QRectF(0.0, y, qreal(width()), row_height);
@@ -169,7 +184,7 @@ void WaterfallWidget::relayout()
         y += row_height;
     }
 
-    m_content_height = y + kOuterPadding;
+    m_content_height = y + outer_pad;
     setMinimumHeight(int(qCeil(m_content_height)));
     updateGeometry();
 }
@@ -183,25 +198,30 @@ void WaterfallWidget::drawRows(QPainter &painter, qreal height)
 
     const QFont label_font = font();
     const QFontMetrics label_fm(label_font, painter.device());
-    const QColor accent = palette().color(QPalette::Highlight);
+    const QColor accent    = fontui::accentColor(palette());
+    const qreal bar_w      = fontui::dpf(3.0, m_dpr);
+    const qreal inset_8    = fontui::dpf(8.0, m_dpr);
+    const qreal inset_10   = fontui::dpf(10.0, m_dpr);
+    const qreal text_gap   = fontui::dpf(kTextGap, m_dpr);
 
     for (const Row &row : m_rows) {
         const bool current = (row.pt == m_current);
         const qreal pill_height
-            = qMin(row.rect.height() - 4.0, qreal(label_fm.height()) + 8.0);
+            = qMin(row.rect.height() - fontui::dpf(4.0, m_dpr),
+                   qreal(label_fm.height()) + inset_8);
 
         if (current) {
             QColor tint = accent;
-            tint.setAlphaF(0.08);
+            tint.setAlphaF(0.09);
             painter.fillRect(row.rect, tint);
-            painter.fillRect(QRectF(row.rect.left(), row.rect.top() + 3.0, 3.0,
-                                    row.rect.height() - 6.0),
+            painter.fillRect(QRectF(row.rect.left(), row.rect.top() + bar_w,
+                                    bar_w, row.rect.height() - bar_w * 2.0),
                              accent);
         }
 
-        const QRectF pill(row.rect.left() + 8.0,
+        const QRectF pill(row.rect.left() + inset_8,
                           row.rect.center().y() - pill_height / 2.0,
-                          m_label_width - 8.0, pill_height);
+                          m_label_width - inset_8, pill_height);
         painter.setFont(label_font);
         if (current) {
             painter.setPen(Qt::NoPen);
@@ -217,8 +237,8 @@ void WaterfallWidget::drawRows(QPainter &painter, qreal height)
 
         const QFont text_font = rowFont(row.pt);
         const QFontMetrics text_fm(text_font, painter.device());
-        const qreal text_x = row.rect.left() + m_label_width + kTextGap;
-        const qreal text_w = qMax(10.0, row.rect.right() - text_x - 10.0);
+        const qreal text_x = row.rect.left() + m_label_width + text_gap;
+        const qreal text_w = qMax(inset_10, row.rect.right() - text_x - inset_10);
         const QString elided
             = text_fm.elidedText(m_text, Qt::ElideRight, int(text_w));
 

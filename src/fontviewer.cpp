@@ -8,7 +8,7 @@
 #include <QSettings>
 #include <QtMath>
 
-#include "fontinspectorengine.h"
+#include "engine/fontinspectorengine.h"
 #include "fontwidget.h"
 #include "seer/viewerhelper.h"
 
@@ -52,7 +52,9 @@ FontViewer::~FontViewer()
 
 QSize FontViewer::getContentSize() const
 {
-    return options()->dpr() * QSize(850, 800);
+    const qreal r
+        = (options() && options()->dpr() > 0.0) ? options()->dpr() : 1.0;
+    return r * QSize(850, 800);
 }
 
 void FontViewer::onCopyTriggered()
@@ -106,6 +108,8 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
         return;
     }
     m_ini = new QSettings(getIniPath(), QSettings::IniFormat, this);
+    m_view->loadShortcuts(*m_ini);
+    m_view->loadPresets(*m_ini);
     // A missing key must not turn into 0 pt, and an out-of-range value must not
     // be written back on close unless the user later picks a valid size.
     if (!m_ini->contains(g_ini_font_size)) {
@@ -140,8 +144,8 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
     m_view->setShowOutlinePoints(
         m_ini->value(g_ini_show_outline, false).toBool());
 
-    updateTheme(options()->theme());
     updateDPR(options()->dpr());
+    updateTheme(options()->theme());
 
     emit sigCommand(VCT_StateChange, VCV_Loaded);
 }
