@@ -7,6 +7,14 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
+if(WIN32)
+    enable_language(RC)
+    set(FONTVIEWER_RC_VERSION "${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0")
+    set(FONTVIEWER_RC_VERSION_STRING "${PROJECT_VERSION}")
+    configure_file(fontviewer.rc.in ${CMAKE_CURRENT_BINARY_DIR}/fontviewer.rc @ONLY)
+    set(FONTVIEWER_RC_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/fontviewer.rc)
+endif()
+
 # MSVC: Enable Debug Information in Release builds
 # /Zi: Generates a PDB file
 # /DEBUG: Linker flag to create the PDB
@@ -92,7 +100,7 @@ target_compile_definitions(fontviewer_core PRIVATE
     PRODUCT_NAME="Seer"
 )
 
-add_library(fontviewer SHARED $<TARGET_OBJECTS:fontviewer_core>)
+add_library(fontviewer SHARED $<TARGET_OBJECTS:fontviewer_core> ${FONTVIEWER_RC_SOURCES})
 target_link_libraries(fontviewer PRIVATE
     SeerSdk::SeerSdk
     freetype
