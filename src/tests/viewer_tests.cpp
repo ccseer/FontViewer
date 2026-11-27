@@ -21,12 +21,14 @@
 #include <QImage>
 #include <QInputMethodEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
+#include <QPointer>
 #include <QPushButton>
 #include <QRawFont>
 #include <QScrollArea>
@@ -41,24 +43,31 @@
 #include <QTextBlock>
 #include <QTextBlockFormat>
 #include <QTextDocument>
+#include <QTextEdit>
+#include <QTimer>
 #include <QToolTip>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QtNumeric>
 
+#include <functional>
 #include <limits>
 
 #include "bars/opentypefeaturesbar.h"
 #include "bars/variableaxesbar.h"
 #include "engine/fontinspectorengine.h"
+#include "engine/unicodeblocks.h"
 #include "fontshortcuts.h"
 #include "fontui.h"
 #include "fontviewer.h"
 #include "fontwidget.h"
 #include "gitversion.h"
+#include "tabs/charactergridmodel.h"
+#include "tabs/characterstab.h"
 #include "tabs/characterwidget.h"
 #include "tabs/fontpreviewedit.h"
 #include "tabs/glyphinspectorwidget.h"
+#include "tabs/samplepreviewtab.h"
 #include "tabs/textpreviewtab.h"
 #include "tabs/waterfallwidget.h"
 
@@ -268,6 +277,22 @@ private slots:
     void openTypeMutexGroupsAndSingleSignal();
     void flowLayoutWrapsNextGroupWhenSeparatorOverflowsBoundary();
     void sliderBadgesStayCloserToOwnSliderAndDrawerUsesClear();
+    void charactersTabAdaptiveColumnsAndScrollReachability();
+    void charactersNonBmpFullPipelineAndOverflowCount();
+    void charactersFilterPrecedenceBlockAndFocusYield();
+    void charactersSelectionStripAndCellSizeIniPersistence();
+    void charactersMultiFaceTtcEnumeration();
+    void charactersOptimizationsAndStripElide();
+    void glyphGuideToggleAnimationAndImmediateLogicalCache();
+    void charactersGlyphNameLookupAndKeyboardNavigation();
+    void sampleTabScriptSectionsCopyAndIsolation();
+    void charactersHostContractToolbarWrapAndSelectionBounds();
+    void characterGridModelHexWordLookupAndUnassigned();
+    void glyphInspectorLongNameOverflowFontClearAndEngineEdgeCases();
+    void reviewFixesSampleOffTabPuaAndHiDpiScaling();
+    void reviewFixesCharactersMenuLifetimeSliderFocusAndLazyNames();
+    void reviewFixesHostPixelFontsNarrowBoundsAndSvgExportLifetime();
+    void p1OffTabClearSelectionStripAndP2GlyphIdReset();
 };
 
 void ViewerTest::escReleaseRunsAfterTheEventLoop()
@@ -840,8 +865,13 @@ void ViewerTest::initialFocusAndTabStayOutsideViewer()
     auto *edit = view->findChild<FontPreviewEdit *>();
     QVERIFY(edit != nullptr);
     QCOMPARE(edit->focusPolicy(), Qt::ClickFocus);
+    auto *filter_edit = view->findChild<QLineEdit *>(
+        QStringLiteral("chars_filter_edit"));
+    QVERIFY(filter_edit != nullptr);
+    QCOMPARE(filter_edit->focusPolicy(), Qt::ClickFocus);
     for (QWidget *child : view->findChildren<QWidget *>()) {
-        if (child == edit || child->window() != view->window()) {
+        if (child == edit || child == filter_edit
+            || child->window() != view->window()) {
             continue;
         }
         const QByteArray label
@@ -1367,7 +1397,7 @@ void ViewerTest::inspectorEngineTracksMvarDecorationMetrics()
 
     tabs->setCurrentIndex(2);
     QApplication::processEvents();
-    emit char_wgt->selectionChanged(QChar('A'));
+    emit char_wgt->selectionChangedCodePoint(quint32('A'));
     QApplication::processEvents();
     tabs->setCurrentIndex(3);
     QApplication::processEvents();
@@ -1837,6 +1867,30 @@ quint32 readU32Be(const QByteArray &b, int off)
 quint16 readU16Be(const QByteArray &b, int off)
 {
     return (quint16(uchar(b[off])) << 8) | quint16(uchar(b[off + 1]));
+}
+
+void writeU32Be(QByteArray &b, int off, quint32 v)
+{
+    b[off]     = char((v >> 24) & 0xFF);
+    b[off + 1] = char((v >> 16) & 0xFF);
+    b[off + 2] = char((v >> 8) & 0xFF);
+    b[off + 3] = char(v & 0xFF);
+}
+
+int findSfntTableDirOffset(const QByteArray &sfnt_bytes, const char *tag4)
+{
+    if (sfnt_bytes.size() < 12) {
+        return -1;
+    }
+    const int num_tables = readU16Be(sfnt_bytes, 4);
+    const QByteArray tag(tag4, 4);
+    for (int i = 0; i < num_tables; ++i) {
+        const int off = 12 + i * 16;
+        if (off + 16 <= sfnt_bytes.size() && sfnt_bytes.mid(off, 4) == tag) {
+            return off;
+        }
+    }
+    return -1;
 }
 
 QByteArray buildCraftedNameTable(const QVector<QPair<quint16, QString>> &entries)
@@ -2366,7 +2420,7 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         QVERIFY(char_wgt->currentFont().featureTags().isEmpty());
         tabs->setCurrentIndex(2);
         QApplication::processEvents();
-        emit char_wgt->selectionChanged(QChar('A'));
+        emit char_wgt->selectionChangedCodePoint(quint32('A'));
         QApplication::processEvents();
         tabs->setCurrentIndex(3);
         QApplication::processEvents();
@@ -2516,6 +2570,7 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         QVERIFY(feat_scroll->verticalScrollBar()->maximum() > 0);
         for (QWidget *child : noto_view.findChildren<QWidget *>()) {
             if (qobject_cast<FontPreviewEdit *>(child)
+                || child->objectName() == QLatin1String("chars_filter_edit")
                 || child->window() != noto_view.window()) {
                 continue;
             }
@@ -2608,7 +2663,7 @@ void ViewerTest::glyphOutlineExtractionMatchesQtAndVariableAxes()
     for (float wght : {400.0f, 750.0f}) {
         fw.setVariableAxisValue(QByteArrayLiteral("wght"), wght);
         if (wght == 400.0f) {
-            emit char_wgt->selectionChanged(QChar('H'));
+            emit char_wgt->selectionChangedCodePoint(quint32('H'));
         }
         QApplication::processEvents();
         const QFont glyph_font = gi->currentFont();
@@ -2818,32 +2873,40 @@ void ViewerTest::characterWidgetLargePointSizeDoesNotOverflowSquareSize()
     large_ft.setPointSize(280);
     cw.updateFont(large_ft);
 
-    const int expected_sq = qMax(16, 4 + QFontMetrics(large_ft, &cw).height());
-    QVERIFY(expected_sq > 255);
+    // Grid cell size stays decoupled from large reading point sizes.
+    QCOMPARE(cw.cellSizePx(), CharacterWidget::kDefCellSizeDp);
 
-    const QWidget &cw_widget = cw;
-    QCOMPARE(cw_widget.sizeHint().width(), 16 * expected_sq);
-
-    // Resizing wider than 16 columns must neither draw ghost columns past col 15
-    // nor select characters outside the 16-column grid.
-    cw.resize(16 * expected_sq + 64, expected_sq);
+    // Few trailing cells in a partial row must not paint past the last glyph or
+    // emit non-zero code points when clicking empty space.
+    QVector<quint32> sample = {'A', 'B', 'C'};
+    cw.setCodePoints(sample);
+    const int w = 6 * cw.cellSizePx() + 16;
+    cw.resize(w, cw.cellSizePx() + 16);
     cw.show();
     QVERIFY(QTest::qWaitForWindowExposed(&cw));
+    QApplication::processEvents();
+
+    const int cols     = cw.columnCount();
+    const int origin_x = qMax(0, (cw.width() - cols * cw.cellSizePx()) / 2);
     const QImage rendered = cw.grab().toImage();
     const QColor base_col = cw.palette().base().color();
-    for (int y = 0; y < rendered.height(); ++y) {
-        for (int x = 16 * expected_sq + 1; x < rendered.width(); ++x) {
+    // Col 0 must render its left border and Row 0 must render its top border.
+    QVERIFY(rendered.pixelColor(origin_x, 4 + cw.cellSizePx() / 2) != base_col);
+    QVERIFY(rendered.pixelColor(origin_x + cw.cellSizePx() / 2, 4) != base_col);
+    for (int y = 4; y < cw.cellSizePx(); ++y) {
+        for (int x = origin_x + 3 * cw.cellSizePx() + 2; x < cw.width(); ++x) {
             QCOMPARE(rendered.pixelColor(x, y), base_col);
         }
     }
 
-    QSignalSpy spy(&cw, &CharacterWidget::selectionChanged);
-    const QPoint out_pt(16 * expected_sq + 8, 8);
-    QMouseEvent press(QEvent::MouseButtonPress, out_pt, cw.mapToGlobal(out_pt),
-                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QSignalSpy spy(&cw, &CharacterWidget::selectionChangedCodePoint);
+    const QPoint empty_pt(origin_x + 4 * cw.cellSizePx(), cw.cellSizePx() / 2);
+    QMouseEvent press(QEvent::MouseButtonPress, empty_pt,
+                      cw.mapToGlobal(empty_pt), Qt::LeftButton, Qt::LeftButton,
+                      Qt::NoModifier);
     QApplication::sendEvent(&cw, &press);
     QCOMPARE(spy.count(), 1);
-    QVERIFY(spy.at(0).at(0).toChar().isNull());
+    QCOMPARE(spy.at(0).at(0).toUInt(), 0u);
 }
 
 void ViewerTest::openTypeFeatureParserDeduplicatesRepeatedScriptAndLangTables()
@@ -3860,6 +3923,11 @@ void ViewerTest::dprScalingUpdatesLayoutMetricsAndIcons()
     const int margin_1x = view.layout()->contentsMargins().left();
     const int cw_w_1x   = static_cast<QWidget *>(cw)->sizeHint().width();
     const int min_pv_1x = preview->minimumWidth();
+    const int pv_hint_h_1x = static_cast<const QWidget *>(preview)->sizeHint().height();
+    auto *line_val = view.findChild<QLabel *>(
+        QStringLiteral("text_line_value_label"));
+    QVERIFY(line_val != nullptr);
+    const int badge_w_1x = line_val->width();
     const int btn_1x    = copy_btn->width();
     const int icon_1x   = copy_btn->iconSize().width();
 
@@ -3868,9 +3936,23 @@ void ViewerTest::dprScalingUpdatesLayoutMetricsAndIcons()
 
     QCOMPARE(view.layout()->contentsMargins().left(), margin_1x * 2);
     QCOMPARE(preview->minimumWidth(), min_pv_1x * 2);
+    QCOMPARE(static_cast<const QWidget *>(preview)->sizeHint().height(),
+             pv_hint_h_1x * 2);
+    QVERIFY(static_cast<const QWidget *>(preview)->sizeHint().height()
+            >= preview->minimumHeight());
+    QVERIFY(line_val->width() > badge_w_1x);
     QCOMPARE(copy_btn->width(), btn_1x * 2);
     QCOMPARE(copy_btn->iconSize().width(), icon_1x * 2);
     QVERIFY(static_cast<QWidget *>(cw)->sizeHint().width() >= cw_w_1x);
+
+    // Waterfall disables Height slider & its value badge; badge must paint
+    // dimmed state rather than full-contrast active text.
+    const QImage badge_enabled = line_val->grab().toImage();
+    view.setWaterfallEnabled(true);
+    QApplication::processEvents();
+    QVERIFY(!line_val->isEnabled());
+    const QImage badge_disabled = line_val->grab().toImage();
+    QVERIFY(badge_disabled != badge_enabled);
 }
 
 void ViewerTest::iniPresetsSeedLoadElideAndPreserveUserText()
@@ -4285,21 +4367,26 @@ void ViewerTest::characterWidgetTooltipEscapesHtmlAndHidesOnEmptySpace()
     CharacterWidget cw;
     cw.init(font_path);
     cw.updateFont(QFont(QStringLiteral("Roboto"), 16));
-    cw.resize(static_cast<const QWidget &>(cw).sizeHint() + QSize(80, 80));
+    cw.resize(520, 420);
     cw.show();
     QVERIFY(QTest::qWaitForWindowExposed(&cw));
+    QApplication::processEvents();
 
-    // Find '<' (0x3C) index in the grid by scanning rows.
-    const int sq = static_cast<const QWidget &>(cw).sizeHint().width() / 16;
+    // Find '<' (0x3C) in the adaptive grid by scanning rows.
+    const int sq       = cw.cellSizePx();
+    const int cols     = cw.columnCount();
+    const int origin_x = qMax(0, (cw.width() - cols * sq) / 2);
+    const int pad_y    = 4;
     QPoint lt_pt;
     for (int row = 0; row < 20 && lt_pt.isNull(); ++row) {
-        for (int col = 0; col < 16; ++col) {
-            const QPoint pt(col * sq + sq / 2, row * sq + sq / 2);
-            QSignalSpy spy(&cw, &CharacterWidget::selectionChanged);
+        for (int col = 0; col < cols; ++col) {
+            const QPoint pt(origin_x + col * sq + sq / 2,
+                            pad_y + row * sq + sq / 2);
+            QSignalSpy spy(&cw, &CharacterWidget::selectionChangedCodePoint);
             QMouseEvent press(QEvent::MouseButtonPress, pt, cw.mapToGlobal(pt),
                               Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
             QApplication::sendEvent(&cw, &press);
-            if (!spy.isEmpty() && spy.at(0).at(0).toChar() == QChar('<')) {
+            if (!spy.isEmpty() && spy.at(0).at(0).toUInt() == '<') {
                 lt_pt = pt;
                 break;
             }
@@ -4310,15 +4397,16 @@ void ViewerTest::characterWidgetTooltipEscapesHtmlAndHidesOnEmptySpace()
     QMouseEvent move_lt(QEvent::MouseMove, lt_pt, cw.mapToGlobal(lt_pt),
                         Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(&cw, &move_lt);
-    QVERIFY(QToolTip::text().contains(QStringLiteral("&lt;")));
     QVERIFY(!QToolTip::text().contains(QStringLiteral("\"><</span>")));
+    QVERIFY(!QToolTip::text().contains(QStringLiteral("font-size:26pt")));
 
-    // Hovering past column 15 (empty space) must not show a 0x0 tooltip.
-    const QPoint empty_pt(16 * sq + 8, 8);
+    // Hovering margin outside grid columns must not show any 0x0/U+0000 tip.
+    const QPoint empty_pt(cw.width() - 1, cw.height() - 1);
     QMouseEvent move_empty(QEvent::MouseMove, empty_pt,
                            cw.mapToGlobal(empty_pt), Qt::NoButton, Qt::NoButton,
                            Qt::NoModifier);
     QApplication::sendEvent(&cw, &move_empty);
+    QVERIFY(!QToolTip::text().contains(QStringLiteral("U+0000")));
     QVERIFY(!QToolTip::text().contains(QStringLiteral("0x0")));
 }
 
@@ -5115,6 +5203,1793 @@ void ViewerTest::sliderBadgesStayCloserToOwnSliderAndDrawerUsesClear()
              QStringLiteral("%1+%2").arg(
                  QString::fromLatin1(FONTVIEWER_VERSION_STR),
                  QString::fromLatin1(FONTVIEWER_GIT_HASH)));
+}
+
+void ViewerTest::charactersTabAdaptiveColumnsAndScrollReachability()
+{
+    const QString roboto_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!roboto_path.isEmpty());
+
+    FontWidget view;
+    QVERIFY(view.init(roboto_path));
+    auto *tabs      = view.findChild<QTabWidget *>();
+    auto *chars_tab = view.findChild<CharactersTab *>();
+    auto *cw        = view.findChild<CharacterWidget *>();
+    QVERIFY(tabs != nullptr && chars_tab != nullptr && cw != nullptr);
+    auto *sa = chars_tab->findChild<QScrollArea *>(
+        QStringLiteral("chars_scroll_area"));
+    QVERIFY(sa != nullptr);
+
+    tabs->setCurrentWidget(chars_tab);
+    view.resize(380, 520);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    const int cols_narrow = cw->columnCount();
+    QCOMPARE(sa->horizontalScrollBar()->maximum(), 0);
+    QVERIFY(sa->verticalScrollBar()->maximum() > 0);
+
+    view.resize(900, 640);
+    QApplication::processEvents();
+    const int cols_wide = cw->columnCount();
+    QVERIFY(cols_wide > cols_narrow);
+    QCOMPARE(sa->horizontalScrollBar()->maximum(), 0);
+    QVERIFY(sa->verticalScrollBar()->maximum() > 0);
+
+    // Scroll to bottom and verify the last glyph's click hit lands on the last
+    // code point inside the visible viewport.
+    sa->verticalScrollBar()->setValue(sa->verticalScrollBar()->maximum());
+    QApplication::processEvents();
+    const int total    = cw->getCharCount();
+    const int sq       = cw->cellSizePx();
+    const int origin_x = qMax(0, (cw->width() - cols_wide * sq) / 2);
+    const int last_row = (total - 1) / cols_wide;
+    const int last_col = (total - 1) % cols_wide;
+    const QPoint last_cell_pt(origin_x + last_col * sq + sq / 2,
+                              4 + last_row * sq + sq / 2);
+    const QPoint vp_pt = cw->mapTo(sa->viewport(), last_cell_pt);
+    QVERIFY(sa->viewport()->rect().contains(vp_pt));
+}
+
+static QByteArray appendFormat12CmapToSfnt(const QByteArray &sfnt_bytes,
+                                           quint32 code_point,
+                                           quint32 glyph_id)
+{
+    const int cmap_dir_off = findSfntTableDirOffset(sfnt_bytes, "cmap");
+    if (cmap_dir_off < 0) {
+        return {};
+    }
+
+    // Minimal valid cmap: 1 encoding record (Platform 3, Encoding 10) -> Format
+    // 12 subtable covering both Basic Latin ('A') and the target non-BMP cp.
+    QByteArray new_cmap;
+    appendU16(new_cmap, 0);   // cmap version
+    appendU16(new_cmap, 1);   // numTables
+    appendU16(new_cmap, 3);   // platformID = Windows
+    appendU16(new_cmap, 10);  // encodingID = UCS-4
+    appendU32(new_cmap, 12);  // offset to subtable
+
+    // Format 12 subtable (16-byte header + 2 * 12-byte groups = 40 bytes)
+    appendU16(new_cmap, 12);  // format
+    appendU16(new_cmap, 0);   // reserved
+    appendU32(new_cmap, 40);  // length
+    appendU32(new_cmap, 0);   // language
+    appendU32(new_cmap, 2);   // numGroups
+    appendU32(new_cmap, 'A');
+    appendU32(new_cmap, 'A');
+    appendU32(new_cmap, glyph_id);
+    appendU32(new_cmap, code_point);
+    appendU32(new_cmap, code_point);
+    appendU32(new_cmap, glyph_id);
+
+    QByteArray out = sfnt_bytes;
+    while (out.size() % 4 != 0) {
+        out.append('\0');
+    }
+    const quint32 new_off = quint32(out.size());
+    out.append(new_cmap);
+    writeU32Be(out, cmap_dir_off + 8, new_off);
+    writeU32Be(out, cmap_dir_off + 12, quint32(new_cmap.size()));
+    const quint32 old_csum = readU32Be(out, cmap_dir_off + 4);
+    Q_UNUSED(old_csum);
+    return out;
+}
+
+void ViewerTest::charactersNonBmpFullPipelineAndOverflowCount()
+{
+    const QString roboto_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!roboto_path.isEmpty());
+
+    // 1) Verify > 65,535 code-point count no longer truncates via ushort.
+    CharacterWidget big_cw;
+    QVector<quint32> many;
+    many.reserve(70000);
+    for (quint32 cp = 0x20000u; cp < 0x20000u + 70000u; ++cp) {
+        many.append(cp);
+    }
+    big_cw.setCodePoints(many);
+    QCOMPARE(big_cw.getCharCount(), 70000);
+
+    // 2) Verify non-BMP U+1F680 end-to-end (engine -> widget -> Inspector -> SVG).
+    const QRawFont raw_roboto(roboto_path, 16);
+    const QVector<quint32> a_gids = raw_roboto.glyphIndexesForString(
+        QStringLiteral("A"));
+    QVERIFY(!a_gids.isEmpty() && a_gids[0] != 0);
+
+    QFile f(roboto_path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QByteArray patched = appendFormat12CmapToSfnt(f.readAll(), 0x1F680u,
+                                                         a_gids[0]);
+    QVERIFY(!patched.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString nonbmp_path = dir.filePath(QStringLiteral("nonbmp.ttf"));
+    QFile out_f(nonbmp_path);
+    QVERIFY(out_f.open(QIODevice::WriteOnly));
+    QCOMPARE(out_f.write(patched), qint64(patched.size()));
+    out_f.close();
+
+    FontInspectorEngine eng;
+    QVERIFY(eng.openFile(nonbmp_path));
+    const auto &cps = eng.faceCodePoints(0);
+    QVERIFY(cps.contains(0x1F680u));
+    const GlyphOutlineData ol = eng.glyphOutline(0, quint32(0x1F680u));
+    QVERIFY(ol.valid);
+
+    FontWidget fw;
+    QVERIFY(fw.init(nonbmp_path));
+    auto *tabs      = fw.findChild<QTabWidget *>();
+    auto *chars_tab = fw.findChild<CharactersTab *>();
+    auto *cw        = fw.findChild<CharacterWidget *>();
+    auto *gi        = fw.findChild<GlyphInspectorWidget *>();
+    QVERIFY(tabs && chars_tab && cw && gi);
+
+    QSignalSpy sel_spy(cw, &CharacterWidget::selectionChanged);
+    emit cw->selectionChangedCodePoint(0x1F680u);
+    QApplication::processEvents();
+    QCOMPARE(sel_spy.count(), 0);  // BMP-only signal stays quiet for SMP
+    QCOMPARE(gi->currentCodePoint(), 0x1F680u);
+    QVERIFY(gi->currentChar().isNull());
+    QCOMPARE(tabs->tabText(tabs->count() - 1),
+             QStringLiteral("Glyph Inspector - U+1F680"));
+    QCOMPARE(unicode_blocks::blockName(0x1F680u),
+             QStringLiteral("Transport and Map Symbols"));
+
+    cw->setSelectedCodePoint(0x1F680u);
+    QVERIFY(!cw->getSelectedCharPix().isNull());
+    const QString svg_path = dir.filePath(QStringLiteral("nonbmp.svg"));
+    QString err;
+    tabs->setCurrentWidget(chars_tab);
+    QVERIFY2(fw.saveAsSvgTo(svg_path, &err), qPrintable(err));
+    QVERIFY(QFileInfo(svg_path).size() > 0);
+}
+
+void ViewerTest::charactersFilterPrecedenceBlockAndFocusYield()
+{
+    const QString roboto_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!roboto_path.isEmpty());
+
+    FontWidget view;
+    QVERIFY(view.init(roboto_path));
+    auto *tabs      = view.findChild<QTabWidget *>();
+    auto *chars_tab = view.findChild<CharactersTab *>();
+    auto *cw        = view.findChild<CharacterWidget *>();
+    auto *combo = view.findChild<QComboBox *>(QStringLiteral("chars_block_combo"));
+    auto *filter = view.findChild<QLineEdit *>(QStringLiteral("chars_filter_edit"));
+    auto *empty_overlay = view.findChild<QWidget *>(
+        QStringLiteral("chars_empty_overlay"));
+    QVERIFY(tabs && chars_tab && cw && combo && filter && empty_overlay);
+
+    tabs->setCurrentWidget(chars_tab);
+    view.resize(820, 620);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    const int all_count = cw->getCharCount();
+    QVERIFY(all_count > 100);
+
+    // Block combo, filter input, and Cell slider group must never overlap.
+    QVERIFY(combo->geometry().right() < filter->geometry().left());
+    auto *cell_slider = chars_tab->findChild<QSlider *>(
+        QStringLiteral("chars_cell_slider"));
+    QVERIFY(cell_slider != nullptr && cell_slider->parentWidget() != nullptr);
+    QVERIFY(filter->geometry().right()
+            < cell_slider->parentWidget()->geometry().left());
+
+    // Block + range filter form AND intersection.
+    filter->setText(QStringLiteral("U+0041-U+0043"));
+    QTest::qWait(120);
+    QApplication::processEvents();
+    QCOMPARE(cw->getCharCount(), 3);
+    QVERIFY(!empty_overlay->isVisible());
+
+    // Switching block away from Basic Latin intersects to 0 and reveals overlay.
+    QVERIFY(combo->count() > 2);
+    combo->setCurrentIndex(2);
+    QApplication::processEvents();
+    QCOMPARE(cw->getCharCount(), 0);
+    QVERIFY(empty_overlay->isVisible());
+
+    combo->setCurrentIndex(0);
+    // Pure hex "ab" must not match "Arabic" block substring.
+    filter->setText(QStringLiteral("ab"));
+    QTest::qWait(120);
+    QApplication::processEvents();
+    QVERIFY(cw->getCharCount() < 50);
+
+    // Filter click takes ClickFocus, Esc clears filter and yields focus back.
+    filter->setFocus(Qt::MouseFocusReason);
+    QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(filter));
+    QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(filter, &esc);
+    QApplication::processEvents();
+    QVERIFY(filter->text().isEmpty());
+    QCOMPARE(cw->getCharCount(), all_count);
+    QWidget *focus_after_esc = QApplication::focusWidget();
+    QVERIFY(!focus_after_esc
+            || (focus_after_esc != chars_tab
+                && !chars_tab->isAncestorOf(focus_after_esc)));
+
+    // Clicking a cell when filter holds focus also clears focus.
+    filter->setFocus(Qt::MouseFocusReason);
+    QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(filter));
+    const QPoint click_pt(qMax(10, (cw->width() - cw->columnCount() * cw->cellSizePx()) / 2 + 8),
+                          10);
+    QMouseEvent press(QEvent::MouseButtonPress, click_pt,
+                      cw->mapToGlobal(click_pt), Qt::LeftButton, Qt::LeftButton,
+                      Qt::NoModifier);
+    QApplication::sendEvent(cw, &press);
+    QApplication::processEvents();
+    QWidget *focus_after_cell = QApplication::focusWidget();
+    QVERIFY(!focus_after_cell
+            || (focus_after_cell != chars_tab
+                && !chars_tab->isAncestorOf(focus_after_cell)));
+}
+
+void ViewerTest::charactersSelectionStripAndCellSizeIniPersistence()
+{
+    const QString roboto_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!roboto_path.isEmpty());
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString ini_path = dir.filePath(QStringLiteral("fontviewer.ini"));
+    {
+        QSettings seed(ini_path, QSettings::IniFormat);
+        seed.setValue(QStringLiteral("char_cell_size"), 999);
+        seed.sync();
+    }
+
+    ViewOptionsPrivate d;
+    d.path = roboto_path;
+    ViewOptions opts;
+    opts.d_ptr = &d;
+
+    {
+        TestFontViewer viewer(ini_path);
+        viewer.load(nullptr, &opts);
+        auto *fw = viewer.findChild<FontWidget *>();
+        QVERIFY(fw != nullptr);
+        // Out-of-range value falls back cleanly without overwriting INI on close.
+        QCOMPARE(fw->charCellSizeDp(), CharacterWidget::kDefCellSizeDp);
+    }
+    {
+        QSettings check(ini_path, QSettings::IniFormat);
+        QCOMPARE(check.value(QStringLiteral("char_cell_size")).toInt(), 999);
+    }
+
+    {
+        TestFontViewer viewer(ini_path);
+        viewer.load(nullptr, &opts);
+        auto *tabs      = viewer.findChild<QTabWidget *>();
+        auto *fw        = viewer.findChild<FontWidget *>();
+        auto *chars_tab = viewer.findChild<CharactersTab *>();
+        auto *cw        = viewer.findChild<CharacterWidget *>();
+        auto *gi        = viewer.findChild<GlyphInspectorWidget *>();
+        auto *edit      = viewer.findChild<FontPreviewEdit *>();
+        QVERIFY(tabs && fw && chars_tab && cw && gi && edit);
+
+        tabs->setCurrentWidget(chars_tab);
+        viewer.resize(820, 620);
+        viewer.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&viewer));
+
+        // Ctrl+= ZoomIn on Characters tab scales Cell Size instead of Point size.
+        const int pt_before = fw->getCurrentFontSize();
+        QAction *zoom_in    = fw->shortcutAction(FontShortcutAction::ZoomIn);
+        QVERIFY(zoom_in != nullptr);
+        zoom_in->trigger();
+        QApplication::processEvents();
+        QCOMPARE(fw->getCurrentFontSize(), pt_before);
+        QCOMPARE(fw->charCellSizeDp(), CharacterWidget::kDefCellSizeDp + 4);
+
+        // Select 'A' in grid, verify Copy Char / Send to Text / Inspect.
+        const int sq       = cw->cellSizePx();
+        const int cols     = cw->columnCount();
+        const int origin_x = qMax(0, (cw->width() - cols * sq) / 2);
+        QPoint a_pt;
+        for (int row = 0; row < 10 && a_pt.isNull(); ++row) {
+            for (int col = 0; col < cols; ++col) {
+                const QPoint pt(origin_x + col * sq + sq / 2,
+                                4 + row * sq + sq / 2);
+                QMouseEvent press(QEvent::MouseButtonPress, pt,
+                                  cw->mapToGlobal(pt), Qt::LeftButton,
+                                  Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(cw, &press);
+                if (cw->selectedCodePoint() == quint32('A')) {
+                    a_pt = pt;
+                    break;
+                }
+            }
+        }
+        QVERIFY(!a_pt.isNull());
+
+        auto *copy_btn = chars_tab->findChild<QPushButton *>(
+            QStringLiteral("chars_copy_text_btn"));
+        auto *send_btn = chars_tab->findChild<QPushButton *>(
+            QStringLiteral("chars_insert_text_btn"));
+        auto *insp_btn = chars_tab->findChild<QPushButton *>(
+            QStringLiteral("chars_inspect_btn"));
+        QVERIFY(copy_btn && send_btn && insp_btn);
+        QCOMPARE(send_btn->text(), QStringLiteral("Send to Text →"));
+        QCOMPARE(insp_btn->text(), QStringLiteral("Inspect →"));
+        QVERIFY(copy_btn->isVisible() && send_btn->isVisible()
+                && insp_btn->isVisible());
+
+        copy_btn->click();
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("A"));
+
+        const QString before_text = edit->toPlainText();
+        send_btn->click();
+        QApplication::processEvents();
+        QCOMPARE(tabs->currentIndex(), 0);
+        QCOMPARE(edit->toPlainText(), before_text + QStringLiteral("A"));
+
+        auto *gi_sa = qobject_cast<QScrollArea *>(tabs->widget(3));
+        QVERIFY(gi_sa != nullptr);
+
+        tabs->setCurrentWidget(chars_tab);
+        insp_btn->click();
+        QApplication::processEvents();
+        QCOMPARE(tabs->currentIndex(), 3);
+        QCOMPARE(gi->currentCodePoint(), quint32('A'));
+        QCOMPARE(gi_sa->verticalScrollBar()->value(), 0);
+
+        tabs->setCurrentWidget(chars_tab);
+        QMouseEvent dbl(QEvent::MouseButtonDblClick, a_pt,
+                        cw->mapToGlobal(a_pt), Qt::LeftButton, Qt::LeftButton,
+                        Qt::NoModifier);
+        QApplication::sendEvent(cw, &dbl);
+        QApplication::processEvents();
+        QCOMPARE(tabs->currentIndex(), 3);
+        QCOMPARE(gi->currentCodePoint(), quint32('A'));
+        QVERIFY(gi_sa->verticalScrollBar()->maximum() > 0);
+        QCOMPARE(gi_sa->verticalScrollBar()->value(),
+                 gi_sa->verticalScrollBar()->maximum());
+    }
+
+    {
+        QSettings saved(ini_path, QSettings::IniFormat);
+        QCOMPARE(saved.value(QStringLiteral("char_cell_size")).toInt(),
+                 CharacterWidget::kDefCellSizeDp + 4);
+    }
+}
+
+void ViewerTest::charactersMultiFaceTtcEnumeration()
+{
+    const QString ttc_path = systemTtcFont();
+    if (ttc_path.isEmpty()) {
+        QSKIP("System TTC font not available");
+    }
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(ttc_path));
+    QVERIFY(engine.faceCount() > 1);
+    const auto &cps0 = engine.faceCodePoints(0);
+    const auto &cps1 = engine.faceCodePoints(1);
+    QVERIFY(!cps0.isEmpty());
+    QVERIFY(!cps1.isEmpty());
+}
+
+void ViewerTest::charactersOptimizationsAndStripElide()
+{
+    CharacterGridModel model;
+    model.setAllCodePoints({0x0041u, 0x0042u, 0x0043u, 0x03B1u, 0x1F600u});
+
+    QVERIFY(model.setSearchQuery(QStringLiteral("latin")));
+    QCOMPARE(model.filteredCodePoints(),
+             QVector<quint32>({0x0041u, 0x0042u, 0x0043u}));
+
+    QVERIFY(model.setSearchQuery(QStringLiteral("41")));
+    QCOMPARE(model.filteredCodePoints(), QVector<quint32>({0x0041u}));
+
+    QVERIFY(model.setSearchQuery(QString()));
+
+    CharactersTab tab;
+    tab.resize(620, 420);
+    tab.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&tab));
+
+    tab.setCodePoints({0x0041u, 0x0042u, 0x0043u, 0xE88Au, 0x1F300u, 0x1F600u},
+                      {10u, 11u, 12u, 412u, 900u, 901u},
+                      {QStringLiteral("A"), QStringLiteral("B"),
+                       QStringLiteral("C"), QStringLiteral("home"),
+                       QStringLiteral("cyclone"), QStringLiteral("grinning")});
+    tab.setCellSizeDp(64, true);
+    QCOMPARE(tab.cellSizeDp(), 64);
+
+    QSignalSpy cell_spy(&tab, &CharactersTab::sigCharCellSizeChanged);
+    auto *badge = tab.findChild<QLabel *>(QStringLiteral("chars_cell_badge"));
+    auto *slider = tab.findChild<QSlider *>(QStringLiteral("chars_cell_slider"));
+    QVERIFY(badge && slider);
+
+    QMouseEvent dbl_badge(QEvent::MouseButtonDblClick, badge->rect().center(),
+                          badge->mapToGlobal(badge->rect().center()),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(badge, &dbl_badge);
+    QCOMPARE(tab.cellSizeDp(), CharacterWidget::kDefCellSizeDp);
+    QCOMPARE(cell_spy.count(), 1);
+    QCOMPARE(cell_spy.takeFirst().at(0).toInt(),
+             CharacterWidget::kDefCellSizeDp);
+
+    tab.setCellSizeDp(72, true);
+    cell_spy.clear();
+    QMouseEvent dbl_slider(QEvent::MouseButtonDblClick, slider->rect().center(),
+                           slider->mapToGlobal(slider->rect().center()),
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(slider, &dbl_slider);
+    QCOMPARE(tab.cellSizeDp(), CharacterWidget::kDefCellSizeDp);
+    QCOMPARE(cell_spy.count(), 1);
+
+    auto *cw       = tab.characterWidget();
+    auto *sel_bar  = tab.findChild<QWidget *>(QStringLiteral("chars_selection_bar"));
+    auto *sel_meta = tab.findChild<QLabel *>(QStringLiteral("chars_sel_meta"));
+    auto *code_chip
+        = tab.findChild<QPushButton *>(QStringLiteral("chars_meta_code_btn"));
+    auto *dec_chip
+        = tab.findChild<QPushButton *>(QStringLiteral("chars_meta_dec_btn"));
+    auto *gid_chip
+        = tab.findChild<QPushButton *>(QStringLiteral("chars_meta_gid_btn"));
+    auto *name_chip
+        = tab.findChild<QPushButton *>(QStringLiteral("chars_meta_name_btn"));
+    auto *copy_btn
+        = tab.findChild<QPushButton *>(QStringLiteral("chars_copy_text_btn"));
+    auto *send_btn
+        = tab.findChild<QPushButton *>(QStringLiteral("chars_insert_text_btn"));
+    auto *insp_btn
+        = tab.findChild<QPushButton *>(QStringLiteral("chars_inspect_btn"));
+    auto *actions_btn
+        = tab.findChild<QPushButton *>(QStringLiteral("chars_actions_menu_btn"));
+    auto *actions_menu
+        = tab.findChild<QMenu *>(QStringLiteral("chars_actions_menu"));
+    QVERIFY(cw && sel_bar && sel_meta && code_chip && dec_chip && gid_chip
+            && name_chip && copy_btn && send_btn && insp_btn && actions_btn
+            && actions_menu);
+    for (QPushButton *b :
+         {code_chip, dec_chip, gid_chip, name_chip, copy_btn, send_btn,
+          insp_btn, actions_btn}) {
+        QCOMPARE(b->focusPolicy(), Qt::NoFocus);
+    }
+
+    // Custom PUA icon glyph shows all copyable metadata chips at standard width.
+    tab.resize(740, 420);
+    emit cw->selectionChangedCodePoint(0xE88Au);
+    QApplication::processEvents();
+    QVERIFY(code_chip->isVisible() && dec_chip->isVisible()
+            && gid_chip->isVisible() && name_chip->isVisible());
+    QCOMPARE(code_chip->text(), QStringLiteral("U+E88A"));
+    QCOMPARE(dec_chip->text(), QStringLiteral("Dec 59530"));
+    QCOMPARE(gid_chip->text(), QStringLiteral("#412"));
+    QCOMPARE(name_chip->text(), QStringLiteral("home"));
+    QVERIFY(copy_btn->isVisible() && send_btn->isVisible()
+            && insp_btn->isVisible());
+    QVERIFY(!actions_btn->isVisible());
+
+    QSignalSpy toast_spy(&tab, &CharactersTab::sigCopyToastRequested);
+    QSignalSpy insert_spy(&tab, &CharactersTab::sigInsertTextRequested);
+    QSignalSpy inspect_spy(&tab, &CharactersTab::inspectRequested);
+
+    for (QPushButton *chip : {code_chip, dec_chip, gid_chip, name_chip}) {
+        const QString expected = chip->text();
+        chip->click();
+        QCOMPARE(QApplication::clipboard()->text(), expected);
+        QVERIFY(toast_spy.count() >= 1);
+        QVERIFY(toast_spy.takeLast().at(0).toString().contains(expected));
+    }
+
+    // Narrow pane preserves primary chips (#GID, glyph name) and folds actions
+    // into the popup Actions menu cleanly without clipping.
+    tab.resize(360, 420);
+    QApplication::processEvents();
+    QVERIFY(!copy_btn->isVisible() && !send_btn->isVisible()
+            && !insp_btn->isVisible());
+    QVERIFY(actions_btn->isVisible());
+    QVERIFY(actions_btn->geometry().right() <= sel_bar->rect().right() + 1);
+    QVERIFY(code_chip->isVisible() && gid_chip->isVisible()
+            && name_chip->isVisible());
+    QCOMPARE(actions_menu->actions().size(), 3);
+
+    QTimer::singleShot(0, actions_menu, [actions_menu]() {
+        actions_menu->actions().at(0)->trigger();
+        actions_menu->close();
+    });
+    actions_btn->click();
+    QCOMPARE(QApplication::clipboard()->text(), QString::fromUcs4(U"\uE88A", 1));
+    QVERIFY(toast_spy.count() >= 1);
+    actions_menu->actions().at(1)->trigger();
+    QCOMPARE(insert_spy.count(), 1);
+    QCOMPARE(insert_spy.takeFirst().at(0).toString(),
+             QString::fromUcs4(U"\uE88A", 1));
+    actions_menu->actions().at(2)->trigger();
+    QCOMPARE(inspect_spy.count(), 1);
+    QCOMPARE(inspect_spy.takeFirst().at(0).toUInt(), 0xE88Au);
+
+    // Long block name elides trailing block label cleanly with tooltip, and
+    // squeezes down further to 360px without clipping actions or chips.
+    tab.resize(440, 420);
+    emit cw->selectionChangedCodePoint(0x1F300u);
+    QApplication::processEvents();
+    QVERIFY(actions_btn->isVisible());
+    QVERIFY(actions_btn->geometry().right() <= sel_bar->rect().right() + 1);
+    QVERIFY(code_chip->isVisible() && gid_chip->isVisible()
+            && name_chip->isVisible());
+    QVERIFY(sel_meta->isVisible());
+    QVERIFY(!sel_meta->toolTip().isEmpty());
+    QVERIFY(sel_meta->text().endsWith(QChar(0x2026)));
+
+    tab.resize(360, 420);
+    QApplication::processEvents();
+    QVERIFY(actions_btn->isVisible());
+    QVERIFY(actions_btn->geometry().right() <= sel_bar->rect().right() + 1);
+    QVERIFY(code_chip->isVisible() && gid_chip->isVisible());
+    QVERIFY(!sel_meta->toolTip().isEmpty());
+
+    // Resizing narrow never alters copied content (full exact token is copied).
+    code_chip->click();
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("U+1F300"));
+    gid_chip->click();
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("#900"));
+    if (name_chip->isVisible()) {
+        name_chip->click();
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("cyclone"));
+    }
+
+    // DPR 2.0 + Dark palette keep strip actions inside bar bounds.
+    QPalette dark;
+    dark.setColor(QPalette::Window, QColor(30, 30, 30));
+    dark.setColor(QPalette::WindowText, QColor(232, 232, 232));
+    tab.setPalette(dark);
+    tab.setDpr(2.0);
+    QApplication::processEvents();
+    QVERIFY(actions_btn->isVisible());
+    QVERIFY(actions_btn->geometry().right() <= sel_bar->rect().right() + 1);
+}
+
+void ViewerTest::glyphGuideToggleAnimationAndImmediateLogicalCache()
+{
+    const QString font_path = fixtureFont();
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(font_path));
+    const FontDecorationMetrics deco = engine.decorationMetrics(0);
+    const GlyphOutlineData outline   = engine.glyphOutline(0, quint32('A'));
+    QVERIFY(outline.valid && !outline.points.isEmpty());
+
+    GlyphInspectorWidget gi;
+    QFont ft(QStringLiteral("Roboto"));
+    ft.setPointSize(16);
+    gi.resize(520, 680);
+    gi.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&gi));
+    gi.updateGlyph(quint32('A'), ft, font_path, deco, outline);
+    QApplication::processEvents();
+
+    auto *preview = gi.previewWidget();
+    auto *baseline_pill
+        = gi.findChild<QPushButton *>(QStringLiteral("guide_pill_baseline"));
+    auto *ascent_pill
+        = gi.findChild<QPushButton *>(QStringLiteral("guide_pill_ascent"));
+    auto *outline_btn
+        = gi.findChild<QPushButton *>(QStringLiteral("guide_pill_outline"));
+    auto *toggle_all
+        = gi.findChild<QPushButton *>(QStringLiteral("guide_toggle_all_btn"));
+    QVERIFY(preview && baseline_pill && ascent_pill && outline_btn
+            && toggle_all);
+
+    QVERIFY(qFuzzyCompare(preview->guideOpacity(GlyphGuideId::Baseline), 1.0));
+    QVERIFY(qFuzzyCompare(preview->outlineOpacity(), 0.0));
+    QVERIFY(!preview->isGuideAnimating());
+
+    // Clicking a guide pill animates opacity while logical caches update at once.
+    baseline_pill->click();
+    preview->repaint();
+    QVERIFY(preview->isGuideAnimating());
+    QVERIFY(!preview->isGuideVisible(GlyphGuideId::Baseline));
+    QVERIFY(!preview->lastLabelTexts().contains(QStringLiteral("baseline")));
+
+    QTRY_VERIFY(!preview->isGuideAnimating());
+    QCOMPARE(preview->guideOpacity(GlyphGuideId::Baseline), 0.0);
+
+    // Outline pill click starts fade-in and populates screen points synchronously.
+    outline_btn->click();
+    preview->repaint();
+    QVERIFY(preview->isGuideAnimating());
+    QVERIFY(preview->isShowOutlinePoints());
+    QVERIFY(!preview->lastOutlineScreenPoints().isEmpty());
+
+    QTRY_VERIFY(!preview->isGuideAnimating());
+    QCOMPARE(preview->outlineOpacity(), 1.0);
+
+    // Baseline is hidden, so Toggle All starts as Show All -> restores Baseline,
+    // then Hide All -> hides all guides, then Show All -> restores all guides.
+    QCOMPARE(toggle_all->text(), QStringLiteral("Show All"));
+    toggle_all->click();
+    QVERIFY(preview->isGuideAnimating());
+    QTRY_VERIFY(!preview->isGuideAnimating());
+    QCOMPARE(preview->guideOpacity(GlyphGuideId::Baseline), 1.0);
+    QCOMPARE(toggle_all->text(), QStringLiteral("Hide All"));
+
+    toggle_all->click();
+    QVERIFY(preview->isGuideAnimating());
+    QTRY_VERIFY(!preview->isGuideAnimating());
+    QCOMPARE(preview->guideOpacity(GlyphGuideId::Ascent), 0.0);
+
+    toggle_all->click();
+    QVERIFY(preview->isGuideAnimating());
+    QTRY_VERIFY(!preview->isGuideAnimating());
+    QCOMPARE(preview->guideOpacity(GlyphGuideId::Ascent), 1.0);
+}
+
+void ViewerTest::charactersGlyphNameLookupAndKeyboardNavigation()
+{
+    const QString font_path = fixtureFont();
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(font_path));
+    const auto &cps   = engine.faceCodePoints(0);
+    const auto &gids  = engine.faceCodePointGlyphIds(0);
+    const auto &names = engine.faceGlyphNames(0);
+    QVERIFY(!cps.isEmpty());
+    QCOMPARE(gids.size(), cps.size());
+    if (!names.isEmpty()) {
+        QCOMPARE(names.size(), cps.size());
+    }
+    const GlyphIdentity id_a = engine.glyphIdentity(0, quint32('A'));
+    QVERIFY(id_a.glyph_index > 0);
+
+    // Glyph name search matches non-hex glyph name directly, even when unsorted.
+    CharacterGridModel named_model;
+    named_model.setAllCodePoints({0x2192u, 0x0041u, 0x0026u}, {12u, 10u, 11u},
+                                 {QStringLiteral("arrowright"),
+                                  QStringLiteral("A"),
+                                  QStringLiteral("ampersand")});
+    QVERIFY(named_model.setSearchQuery(QStringLiteral("arrow")));
+    QCOMPARE(named_model.filteredCodePoints(), QVector<quint32>({0x2192u}));
+    QCOMPARE(named_model.glyphIdForCodePoint(0x2192u), 12u);
+    QCOMPARE(named_model.glyphNameForCodePoint(0x2192u),
+             QStringLiteral("arrowright"));
+    QVERIFY(named_model.containsCodePoint(0x2192u));
+
+    FontWidget view;
+    QVERIFY(view.init(font_path));
+    view.resize(760, 560);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+
+    auto *tabs      = view.findChild<QTabWidget *>();
+    auto *chars_tab = view.findChild<CharactersTab *>();
+    auto *cw        = view.findChild<CharacterWidget *>();
+    auto *combo     = view.findChild<QComboBox *>(
+        QStringLiteral("chars_block_combo"));
+    auto *filter    = view.findChild<QLineEdit *>(
+        QStringLiteral("chars_filter_edit"));
+    auto *sel_meta = view.findChild<QLabel *>(
+        QStringLiteral("chars_sel_meta"));
+    QVERIFY(tabs && chars_tab && cw && combo && filter && sel_meta);
+
+    tabs->setCurrentWidget(chars_tab);
+    QApplication::processEvents();
+    QVERIFY(cw->columnCount() >= 2);
+    QCOMPARE(filter->height(), combo->height());
+
+    view.updateDPR(2.0);
+    QApplication::processEvents();
+    QCOMPARE(filter->height(), combo->height());
+    view.updateDPR(1.0);
+    QApplication::processEvents();
+
+    // Arrow keys navigate the grid while leaving CharacterWidget NoFocus.
+    QTest::keyClick(chars_tab, Qt::Key_Right);
+    QApplication::processEvents();
+    const quint32 first_cp = cps.first();
+    QCOMPARE(cw->selectedCodePoint(), first_cp);
+    auto *gid_chip
+        = chars_tab->findChild<QPushButton *>(QStringLiteral("chars_meta_gid_btn"));
+    QVERIFY(gid_chip != nullptr);
+    QVERIFY(gid_chip->isVisible());
+    QVERIFY(gid_chip->text().startsWith(QLatin1Char('#')));
+
+    QTest::keyClick(chars_tab, Qt::Key_Right);
+    QApplication::processEvents();
+    QCOMPARE(cw->selectedCodePoint(), cps.at(1));
+
+    QTest::keyClick(chars_tab, Qt::Key_Down);
+    QApplication::processEvents();
+    const int expected_down_idx = 1 + cw->columnCount();
+    if (expected_down_idx < cps.size()) {
+        QCOMPARE(cw->selectedCodePoint(), cps.at(expected_down_idx));
+        // PageUp from row 1 must jump to row 0 (same col), not get stuck.
+        QTest::keyClick(chars_tab, Qt::Key_PageUp);
+        QApplication::processEvents();
+        QCOMPARE(cw->selectedCodePoint(), cps.at(1));
+    }
+
+    QTest::keyClick(chars_tab, Qt::Key_Home);
+    QApplication::processEvents();
+    QCOMPARE(cw->selectedCodePoint(), first_cp);
+
+    // Focus must never remain inside Characters grid controls after key nav.
+    QWidget *fw = QApplication::focusWidget();
+    QVERIFY(!fw || (fw != &view && !view.isAncestorOf(fw)));
+
+    // Focusing filter edit yields arrow keys cleanly back to text editing.
+    filter->setFocus(Qt::MouseFocusReason);
+    QApplication::processEvents();
+    const quint32 before_filter_key = cw->selectedCodePoint();
+    QTest::keyClicks(filter, QStringLiteral("0041"));
+    QTest::keyClick(filter, Qt::Key_Left);
+    QApplication::processEvents();
+    QCOMPARE(cw->selectedCodePoint(), before_filter_key);
+
+    // Pressing Enter in filter applies filter, clears focus, selects result.
+    QTest::keyClick(filter, Qt::Key_Return);
+    QApplication::processEvents();
+    QVERIFY(!filter->hasFocus());
+    QCOMPARE(cw->selectedCodePoint(), quint32(0x0041u));
+
+    // Pressing Return on Characters navigates to Glyph Inspector.
+    QTest::keyClick(chars_tab, Qt::Key_Return);
+    QApplication::processEvents();
+    QCOMPARE(tabs->currentIndex(), 3);
+    auto *gi = view.findChild<GlyphInspectorWidget *>();
+    QVERIFY(gi != nullptr);
+    QCOMPARE(gi->currentCodePoint(), quint32(0x0041u));
+}
+
+void ViewerTest::sampleTabScriptSectionsCopyAndIsolation()
+{
+    const QString noto_vf = fixturePath("NotoSans-VariableFont_wdth,wght.ttf");
+    if (noto_vf.isEmpty()) {
+        QSKIP("NotoSans fixture missing");
+    }
+
+    FontWidget view;
+    QVERIFY(view.init(noto_vf));
+    view.resize(820, 680);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+
+    auto *tabs       = view.findChild<QTabWidget *>();
+    auto *sample_tab = view.findChild<SamplePreviewTab *>();
+    QVERIFY(tabs && sample_tab);
+
+    tabs->setCurrentWidget(sample_tab);
+    QApplication::processEvents();
+
+    auto *sample_lbl = view.findChild<QLabel *>(QStringLiteral("label_sample"));
+    auto *summary    = view.findChild<QLabel *>(
+        QStringLiteral("sample_summary_label"));
+    auto *copy_btn
+        = view.findChild<QPushButton *>(QStringLiteral("sample_copy_btn"));
+    auto *copy_all = view.findChild<QPushButton *>(
+        QStringLiteral("sample_copy_all_btn"));
+    QVERIFY(sample_lbl && summary && copy_btn && copy_all);
+    QCOMPARE(view.findChild<QPushButton *>(
+                 QStringLiteral("sample_follow_ot_btn")),
+             nullptr);
+    QVERIFY(summary->text().contains(QStringLiteral("Writing System")));
+
+    QSignalSpy toast_spy(&view, &FontWidget::sigToast);
+    copy_btn->click();
+    QCOMPARE(QApplication::clipboard()->text(), sample_lbl->text());
+    QVERIFY(toast_spy.count() >= 1);
+
+    toast_spy.clear();
+    copy_all->click();
+    QVERIFY(!QApplication::clipboard()->text().isEmpty());
+    QVERIFY(toast_spy.count() >= 1);
+
+    // Text tab OpenType and letter-spacing overrides remain isolated from Sample.
+    view.setFeatureEnabled(QByteArrayLiteral("smcp"), true);
+    view.setLetterSpacing(3.0);
+    QApplication::processEvents();
+    QVERIFY(sample_lbl->font().featureTags().isEmpty());
+    QVERIFY(qFuzzyIsNull(sample_lbl->font().letterSpacing()));
+
+    // Dark palette + DPR updates must repaint Sample labels and spacing cleanly.
+    QPalette dark = view.palette();
+    dark.setColor(QPalette::Window, QColor(28, 28, 32));
+    dark.setColor(QPalette::WindowText, QColor(238, 238, 242));
+    view.setPalette(dark);
+    view.updateDPR(2.0);
+    QApplication::processEvents();
+    QCOMPARE(sample_lbl->palette().color(QPalette::WindowText),
+             QColor(238, 238, 242));
+    QVERIFY(summary->palette().color(QPalette::WindowText) != QColor(28, 28, 32));
+
+    // Ctrl+Wheel over empty viewport whitespace still zooms cleanly.
+    QSignalSpy zoom_spy(sample_tab, &SamplePreviewTab::sigZoomRequested);
+    auto *scroll = sample_tab->findChild<QScrollArea *>(
+        QStringLiteral("scrollArea_sample"));
+    QVERIFY(scroll && scroll->viewport());
+    sendWheel(scroll->viewport(), 120, Qt::ControlModifier);
+    QCOMPARE(zoom_spy.count(), 1);
+    QCOMPARE(zoom_spy.at(0).at(0).toInt(), 1);
+}
+
+void ViewerTest::charactersHostContractToolbarWrapAndSelectionBounds()
+{
+    // 1) Host Esc QAction override + IME preedit preservation in filter edit.
+    QWidget host;
+    auto *host_lay = new QVBoxLayout(&host);
+    host_lay->setContentsMargins(0, 0, 0, 0);
+    auto *tab = new CharactersTab(&host);
+    host_lay->addWidget(tab);
+    host.resize(620, 440);
+
+    int host_esc_count = 0;
+    auto *esc_action   = new QAction(&host);
+    esc_action->setShortcut(QKeySequence(Qt::Key_Escape));
+    connect(esc_action, &QAction::triggered, &host,
+            [&host_esc_count]() { ++host_esc_count; });
+    host.addAction(esc_action);
+
+    tab->setCodePoints({0x0041u, 0x0042u, 0x0043u, 0x0044u, 0xE88Au},
+                       {10u, 11u, 12u, 13u, 412u},
+                       {QStringLiteral("A"), QStringLiteral("B"),
+                        QStringLiteral("C"), QStringLiteral("D"),
+                        QStringLiteral("very_long_unbroken_postscript_glyph_"
+                                       "name_0123456789abcdef_0123456789abcdef_"
+                                       "0123456789abcdef_0123456789abcdef")});
+    host.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&host));
+
+    auto *filter = tab->findChild<QLineEdit *>(
+        QStringLiteral("chars_filter_edit"));
+    QVERIFY(filter != nullptr);
+    filter->setFocus(Qt::MouseFocusReason);
+    filter->setText(QStringLiteral("Latin"));
+    QApplication::processEvents();
+    QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(filter));
+
+    QInputMethodEvent preedit(QStringLiteral("zw"), {});
+    QApplication::sendEvent(filter, &preedit);
+    QTest::keyClick(filter, Qt::Key_Escape);
+    QApplication::processEvents();
+    QCOMPARE(host_esc_count, 0);
+    QCOMPARE(filter->text(), QStringLiteral("Latin"));
+    QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(filter));
+
+    QInputMethodEvent end_preedit;
+    QApplication::sendEvent(filter, &end_preedit);
+    QTest::keyClick(filter, Qt::Key_Escape);
+    QCOMPARE(host_esc_count, 0);
+    QVERIFY(filter->text().isEmpty());
+    // Deferred queued clearFocus matches FontPreviewEdit host race guard.
+    QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(filter));
+    QTRY_VERIFY(QApplication::focusWidget() != filter);
+
+    QTest::keyClick(&host, Qt::Key_Escape);
+    QCOMPARE(host_esc_count, 1);
+
+    // 2) Toolbar super-narrow & DPR 2.0 wrap never clips Block, Filter, or Cell.
+    auto *combo = tab->findChild<QComboBox *>(
+        QStringLiteral("chars_block_combo"));
+    auto *slider = tab->findChild<QSlider *>(
+        QStringLiteral("chars_cell_slider"));
+    QVERIFY(combo && slider);
+    QWidget *toolbar = combo->parentWidget();
+    QVERIFY(toolbar != nullptr);
+
+    for (qreal dpr : {1.0, 2.0}) {
+        tab->setDpr(dpr);
+        host.resize(240, 440);
+        QApplication::processEvents();
+        const QRect tb_rect = toolbar->rect();
+        QVERIFY(combo->geometry().left() >= tb_rect.left());
+        QVERIFY(combo->geometry().right() <= tb_rect.right());
+        QVERIFY(filter->geometry().left() >= tb_rect.left());
+        QVERIFY(filter->geometry().right() <= tb_rect.right());
+        QVERIFY(filter->width() > 20);
+        QVERIFY(!combo->geometry().intersects(filter->geometry()));
+    }
+    tab->setDpr(1.0);
+
+    // 3) Selection strip with extra-long glyph name never pushes Actions out of bounds.
+    auto *cw      = tab->characterWidget();
+    auto *sel_bar = tab->findChild<QWidget *>(
+        QStringLiteral("chars_selection_bar"));
+    auto *code_chip = tab->findChild<QPushButton *>(
+        QStringLiteral("chars_meta_code_btn"));
+    auto *actions_btn = tab->findChild<QPushButton *>(
+        QStringLiteral("chars_actions_menu_btn"));
+    QVERIFY(cw && sel_bar && code_chip && actions_btn);
+
+    emit cw->selectionChangedCodePoint(0xE88Au);
+    for (int w : {360, 280, 210}) {
+        for (qreal dpr : {1.0, 2.0}) {
+            tab->setDpr(dpr);
+            host.resize(w, 440);
+            QApplication::processEvents();
+            QVERIFY(actions_btn->isVisible());
+            QVERIFY(actions_btn->geometry().right() <= sel_bar->rect().right());
+            QVERIFY(code_chip->isVisible());
+        }
+    }
+    tab->setDpr(1.0);
+    code_chip->click();
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("U+E88A"));
+
+    // 4) Down key on the final partial row stays in-place symmetrically with Up.
+    host.resize(320, 440);
+    tab->setCellSizeDp(64, false);
+    QApplication::processEvents();
+    const int cols = cw->columnCount();
+    QVERIFY(cols >= 2 && cols <= 4);
+    QTest::keyClick(tab, Qt::Key_End);
+    QApplication::processEvents();
+    QCOMPARE(cw->selectedCodePoint(), quint32(0xE88Au));
+    QTest::keyClick(tab, Qt::Key_Down);
+    QApplication::processEvents();
+    QCOMPARE(cw->selectedCodePoint(), quint32(0xE88Au));
+}
+
+void ViewerTest::characterGridModelHexWordLookupAndUnassigned()
+{
+    CharacterGridModel model;
+    model.setAllCodePoints({0x0041u, 0x2FE5u, 0xE145u, 0xE87Cu, 0xE880u, 0xFACEu},
+                           {10u, 15u, 11u, 12u, 13u, 14u},
+                           {QStringLiteral("A"), QStringLiteral("unassigned"),
+                            QStringLiteral("add"), QStringLiteral("face"),
+                            QStringLiteral("faced_smile"),
+                            QStringLiteral("uniFACE")});
+
+    // Bare hex words like "face" and "add" match exact glyph names plus hex.
+    QVERIFY(model.setSearchQuery(QStringLiteral("face")));
+    QCOMPARE(model.filteredCodePoints(), QVector<quint32>({0xE87Cu, 0xFACEu}));
+
+    QVERIFY(model.setSearchQuery(QStringLiteral("add")));
+    QCOMPARE(model.filteredCodePoints(), QVector<quint32>({0xE145u}));
+
+    // Explicit U+ hex skips glyph name collision.
+    QVERIFY(model.setSearchQuery(QStringLiteral("U+FACE")));
+    QCOMPARE(model.filteredCodePoints(), QVector<quint32>({0xFACEu}));
+
+    // Unassigned block filter matches only unassigned code points linearly.
+    QVERIFY(model.setSearchQuery(QString()));
+    QVERIFY(model.setBlockFilter(CharacterGridModel::kUnassignedBlock));
+    QCOMPARE(model.filteredCodePoints(), QVector<quint32>({0x2FE5u}));
+}
+
+void ViewerTest::glyphInspectorLongNameOverflowFontClearAndEngineEdgeCases()
+{
+    const QString roboto_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!roboto_path.isEmpty());
+
+    // 1) Long glyph name in narrow 320px QScrollArea elides cleanly without horizontal scrollbar.
+    const QString long_name(150, QLatin1Char('x'));
+    QScrollArea scroll;
+    scroll.setWidgetResizable(true);
+    auto *gi = new GlyphInspectorWidget(&scroll);
+    scroll.setWidget(gi);
+    scroll.resize(320, 480);
+    scroll.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+
+    QFont f(QStringLiteral("Arial"), 16);
+    gi->updateGlyph(quint32('A'), f, roboto_path, {}, {}, long_name);
+    QApplication::processEvents();
+
+    auto *id_lbl = gi->findChild<QLabel *>(QStringLiteral("gi_glyph_id_label"));
+    QVERIFY(id_lbl != nullptr);
+    QVERIFY(id_lbl->text().contains(QChar(0x2026)));
+    QVERIFY(id_lbl->toolTip().contains(long_name));
+    QCOMPARE(scroll.horizontalScrollBar()->maximum(), 0);
+
+    // Explicit empty updateFont clears stale glyph name, whereas default null preserves it.
+    gi->updateFont(f, {}, {}, QStringLiteral("kept_name"));
+    QVERIFY(id_lbl->toolTip().contains(QStringLiteral("kept_name"))
+            || id_lbl->text().contains(QStringLiteral("kept_name")));
+    gi->updateFont(f, {}, {});
+    QVERIFY(id_lbl->toolTip().contains(QStringLiteral("kept_name"))
+            || id_lbl->text().contains(QStringLiteral("kept_name")));
+    gi->updateFont(f, {}, {}, QStringLiteral(""));
+    QVERIFY(!id_lbl->text().contains(QStringLiteral("kept_name")));
+    QVERIFY(!id_lbl->toolTip().contains(QStringLiteral("kept_name")));
+
+    // Hiding preview stops an active guide animation cleanly and snaps opacity.
+    auto *preview = gi->findChild<GlyphPreviewWidget *>();
+    QVERIFY(preview != nullptr);
+    preview->setGuideVisible(GlyphGuideId::Baseline, false, true);
+    QVERIFY(preview->isGuideAnimating());
+    scroll.hide();
+    QApplication::processEvents();
+    QVERIFY(!preview->isGuideAnimating());
+    QCOMPARE(preview->guideOpacity(GlyphGuideId::Baseline), 0.0);
+
+    // 2) Engine: >128 byte post 2.0 glyph name + SMP-only probeSampleForFace.
+    QFile src_file(roboto_path);
+    QVERIFY(src_file.open(QIODevice::ReadOnly));
+    const QByteArray roboto_bytes = src_file.readAll();
+
+    const QRawFont raw_roboto(roboto_path, 16);
+    const QVector<quint32> a_gids
+        = raw_roboto.glyphIndexesForString(QStringLiteral("A"));
+    QVERIFY(!a_gids.isEmpty() && a_gids[0] != 0);
+    const quint32 gid_a = a_gids[0];
+
+    // Patch Format 12 cmap containing ONLY non-BMP U+1F600 mapped to gid_a.
+    QByteArray smp_only = appendFormat12CmapToSfnt(roboto_bytes, 0x1F600u, gid_a);
+    QVERIFY(!smp_only.isEmpty());
+    const int cmap_dir_off = findSfntTableDirOffset(smp_only, "cmap");
+    const int post_dir_off = findSfntTableDirOffset(smp_only, "post");
+    const int maxp_dir_off = findSfntTableDirOffset(smp_only, "maxp");
+    QVERIFY(cmap_dir_off >= 0 && post_dir_off >= 0 && maxp_dir_off >= 0);
+
+    // Replace the appended cmap table with a single-group Format 12 cmap (0x1F600).
+    QByteArray one_smp_cmap;
+    appendU16(one_smp_cmap, 0);
+    appendU16(one_smp_cmap, 1);
+    appendU16(one_smp_cmap, 3);
+    appendU16(one_smp_cmap, 10);
+    appendU32(one_smp_cmap, 12);
+    appendU16(one_smp_cmap, 12);
+    appendU16(one_smp_cmap, 0);
+    appendU32(one_smp_cmap, 28);
+    appendU32(one_smp_cmap, 0);
+    appendU32(one_smp_cmap, 1);
+    appendU32(one_smp_cmap, 0x1F600u);
+    appendU32(one_smp_cmap, 0x1F600u);
+    appendU32(one_smp_cmap, gid_a);
+    while (smp_only.size() % 4 != 0) {
+        smp_only.append('\0');
+    }
+    const quint32 smp_cmap_off = quint32(smp_only.size());
+    smp_only.append(one_smp_cmap);
+    writeU32Be(smp_only, cmap_dir_off + 8, smp_cmap_off);
+    writeU32Be(smp_only, cmap_dir_off + 12, quint32(one_smp_cmap.size()));
+
+    // Patch post 2.0 table with a 180-byte glyph name on gid_a.
+    const quint32 maxp_off = readU32Be(smp_only, maxp_dir_off + 8);
+    const quint16 num_glyphs = readU16Be(smp_only, int(maxp_off) + 4);
+    QVERIFY(num_glyphs > gid_a);
+    const QByteArray long_ps_name(180, 'g');
+    QByteArray new_post(32, '\0');
+    new_post[0] = 0x00;
+    new_post[1] = 0x02;  // version 2.0
+    appendU16(new_post, num_glyphs);
+    for (quint16 g = 0; g < num_glyphs; ++g) {
+        appendU16(new_post, g == gid_a ? 258 : 0);
+    }
+    new_post.append(char(long_ps_name.size()));
+    new_post.append(long_ps_name);
+    while (smp_only.size() % 4 != 0) {
+        smp_only.append('\0');
+    }
+    const quint32 new_post_off = quint32(smp_only.size());
+    smp_only.append(new_post);
+    writeU32Be(smp_only, post_dir_off + 8, new_post_off);
+    writeU32Be(smp_only, post_dir_off + 12, quint32(new_post.size()));
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString edge_path = dir.filePath(QStringLiteral("smp_longname.ttf"));
+    QFile edge_file(edge_path);
+    QVERIFY(edge_file.open(QIODevice::WriteOnly));
+    QCOMPARE(edge_file.write(smp_only), qint64(smp_only.size()));
+    edge_file.close();
+
+    FontInspectorEngine edge_eng;
+    QVERIFY(edge_eng.openFile(edge_path));
+    const QString smp_sample = edge_eng.probeSampleForFace(0);
+    QCOMPARE(smp_sample, QString::fromUcs4(U"\U0001F600", 1));
+    const GlyphIdentity smp_id = edge_eng.glyphIdentity(0, 0x1F600u);
+    QCOMPARE(smp_id.glyph_index, gid_a);
+    QCOMPARE(smp_id.glyph_name, QString::fromLatin1(long_ps_name));
+}
+
+void ViewerTest::reviewFixesSampleOffTabPuaAndHiDpiScaling()
+{
+    const QString roboto_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!roboto_path.isEmpty());
+
+    QFile src_file(roboto_path);
+    QVERIFY(src_file.open(QIODevice::ReadOnly));
+    QByteArray pua_sfnt = src_file.readAll();
+
+    const QRawFont raw_roboto(roboto_path, 16);
+    const QVector<quint32> a_gids
+        = raw_roboto.glyphIndexesForString(QStringLiteral("A"));
+    QVERIFY(!a_gids.isEmpty() && a_gids[0] != 0);
+    const quint32 gid_a = a_gids[0];
+
+    const int cmap_dir_off = findSfntTableDirOffset(pua_sfnt, "cmap");
+    const int os2_dir_off  = findSfntTableDirOffset(pua_sfnt, "OS/2");
+    QVERIFY(cmap_dir_off >= 0 && os2_dir_off >= 0);
+
+    // Clear OS/2 unicode range bits so Qt reports no Latin writing system
+    // while mapping only PUA U+E88A..U+E88D.
+    const quint32 os2_off = readU32Be(pua_sfnt, os2_dir_off + 8);
+    const quint32 os2_len = readU32Be(pua_sfnt, os2_dir_off + 12);
+    QVERIFY(os2_off + os2_len <= quint32(pua_sfnt.size()));
+    QVERIFY(os2_len >= 58);
+    for (int i = 42; i < 58; ++i) {
+        pua_sfnt[int(os2_off) + i] = '\0';
+    }
+
+    QByteArray pua_cmap;
+    appendU16(pua_cmap, 0);
+    appendU16(pua_cmap, 1);
+    appendU16(pua_cmap, 3);
+    appendU16(pua_cmap, 10);
+    appendU32(pua_cmap, 12);
+    appendU16(pua_cmap, 12);
+    appendU16(pua_cmap, 0);
+    appendU32(pua_cmap, 28);
+    appendU32(pua_cmap, 0);
+    appendU32(pua_cmap, 1);
+    appendU32(pua_cmap, 0xE88Au);
+    appendU32(pua_cmap, 0xE88Du);
+    appendU32(pua_cmap, gid_a);
+    while (pua_sfnt.size() % 4 != 0) {
+        pua_sfnt.append('\0');
+    }
+    const quint32 pua_cmap_off = quint32(pua_sfnt.size());
+    pua_sfnt.append(pua_cmap);
+    writeU32Be(pua_sfnt, cmap_dir_off + 8, pua_cmap_off);
+    writeU32Be(pua_sfnt, cmap_dir_off + 12, quint32(pua_cmap.size()));
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString pua_path = dir.filePath(QStringLiteral("pua_only.ttf"));
+    QFile pua_file(pua_path);
+    QVERIFY(pua_file.open(QIODevice::WriteOnly));
+    QCOMPARE(pua_file.write(pua_sfnt), qint64(pua_sfnt.size()));
+    pua_file.close();
+
+    // 1) probeSampleForFace returns PUA characters when no standard printable
+    // scalars exist.
+    FontInspectorEngine pua_eng;
+    QVERIFY(pua_eng.openFile(pua_path));
+    const QString pua_probe = pua_eng.probeSampleForFace(0);
+    QCOMPARE(pua_probe, QString::fromUcs4(U"\uE88A\uE88B\uE88C\uE88D", 4));
+
+    FontWidget fw;
+    QVERIFY(fw.init(pua_path));
+    fw.resize(760, 560);
+    fw.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&fw));
+
+    auto *tabs       = fw.findChild<QTabWidget *>();
+    auto *sample_tab = fw.findChild<SamplePreviewTab *>();
+    QVERIFY(tabs && sample_tab);
+    auto *sample_lbl = sample_tab->findChild<QLabel *>(
+        QStringLiteral("label_sample"));
+    QVERIFY(sample_lbl != nullptr);
+    QCOMPARE(sample_lbl->text(), pua_probe);
+
+    // 2) Off-tab renderPixmap & prepareSvgExport must not permanently hide
+    // per-script Copy buttons, and draw_out safely no-ops after tab delete.
+    QVERIFY(tabs->currentWidget() != sample_tab);
+    sample_tab->updateSample(QStringLiteral("OffTabFamily"), fw.font(),
+                             QStringLiteral("Sample"));
+    QApplication::processEvents();
+    QVERIFY(!sample_tab->renderPixmap(1.0).isNull());
+    QSize svg_sz;
+    QColor svg_bg;
+    std::function<void(QPainter &)> svg_draw;
+    QVERIFY(sample_tab->prepareSvgExport(svg_sz, svg_bg, svg_draw));
+    QImage img(svg_sz, QImage::Format_ARGB32_Premultiplied);
+    QPainter painter(&img);
+    svg_draw(painter);
+    painter.end();
+
+    tabs->setCurrentWidget(sample_tab);
+    QApplication::processEvents();
+    const auto copy_btns
+        = sample_tab->findChildren<QPushButton *>(QStringLiteral("sample_copy_btn"));
+    QVERIFY(!copy_btns.isEmpty());
+    for (QPushButton *b : copy_btns) {
+        QVERIFY(!b->isHidden());
+        QVERIFY(b->isVisible());
+    }
+
+    auto *ephemeral_sample = new SamplePreviewTab();
+    ephemeral_sample->resize(400, 300);
+    ephemeral_sample->updateSample(QStringLiteral("Eph"), fw.font(),
+                                   QStringLiteral("ABC"));
+    ephemeral_sample->show();
+    QApplication::processEvents();
+    QSize eph_sz;
+    QColor eph_bg;
+    std::function<void(QPainter &)> eph_draw;
+    QVERIFY(ephemeral_sample->prepareSvgExport(eph_sz, eph_bg, eph_draw));
+    delete ephemeral_sample;
+    QImage safe_img(eph_sz, QImage::Format_ARGB32_Premultiplied);
+    QPainter safe_p(&safe_img);
+    eph_draw(safe_p);
+    safe_p.end();
+
+    // 3) Seer Host pixelSize scaling & manual setDpr scaling apply cleanly to
+    // ValueBadge and SamplePreviewTab caption/heading labels.
+    QWidget px_host;
+    QFont px_font = px_host.font();
+    px_font.setPixelSize(24);
+    px_host.setFont(px_font);
+    auto *badge = new fontui::ValueBadge(2.0, QStringLiteral("-20.0"), &px_host);
+    QVERIFY(badge->font().pixelSize() >= 18);
+    QCOMPARE(badge->font().pointSizeF(), -1.0);
+
+    auto *hosted_sample = new SamplePreviewTab(&px_host);
+    hosted_sample->setDpr(2.0);
+    hosted_sample->updateSample(QStringLiteral("Hosted"), fw.font(),
+                                QStringLiteral("Hello"));
+    auto *sum_lbl = hosted_sample->findChild<QLabel *>(
+        QStringLiteral("sample_summary_label"));
+    QVERIFY(sum_lbl != nullptr);
+    QVERIFY(sum_lbl->font().pixelSize() >= 18);
+    QCOMPARE(sum_lbl->font().pointSizeF(), -1.0);
+}
+
+void ViewerTest::reviewFixesCharactersMenuLifetimeSliderFocusAndLazyNames()
+{
+    // 1) Destroying CharactersTab during openActionsMenu() modal exec() must
+    // not crash or UAF.
+    QPointer<CharactersTab> tab_guard;
+    auto *heap_tab = new CharactersTab();
+    tab_guard      = heap_tab;
+    heap_tab->setCodePoints({0x0041u, 0x0042u}, {10u, 11u},
+                            {QStringLiteral("A"), QStringLiteral("B")});
+    heap_tab->resize(260, 420);
+    heap_tab->show();
+    QVERIFY(QTest::qWaitForWindowExposed(heap_tab));
+
+    auto *cw          = heap_tab->characterWidget();
+    auto *actions_btn = heap_tab->findChild<QPushButton *>(
+        QStringLiteral("chars_actions_menu_btn"));
+    QVERIFY(cw && actions_btn);
+    emit cw->selectionChangedCodePoint(0x0041u);
+    QApplication::processEvents();
+    QVERIFY(actions_btn->isVisible());
+
+    QTimer::singleShot(0, heap_tab, [heap_tab]() { delete heap_tab; });
+    actions_btn->click();
+    QVERIFY(tab_guard.isNull());
+
+    // 2) Filter clearing selection closes an open actions menu, and
+    // QSlider/QTabBar focus blocks grid navigation shortcuts.
+    QWidget host;
+    auto *host_lay = new QVBoxLayout(&host);
+    auto *tab_bar  = new QTabBar(&host);
+    tab_bar->addTab(QStringLiteral("One"));
+    tab_bar->addTab(QStringLiteral("Two"));
+    tab_bar->setFocusPolicy(Qt::StrongFocus);
+    auto *slider = new QSlider(Qt::Horizontal, &host);
+    slider->setRange(0, 100);
+    slider->setFocusPolicy(Qt::StrongFocus);
+    auto *tab = new CharactersTab(&host);
+    host_lay->addWidget(tab_bar);
+    host_lay->addWidget(slider);
+    host_lay->addWidget(tab, 1);
+
+    tab->setCodePoints({0x0041u, 0x0042u, 0x2FE5u}, {10u, 11u, 12u},
+                       {QStringLiteral("A"), QStringLiteral("B"),
+                        QStringLiteral("gap_glyph")});
+    host.resize(300, 460);
+    host.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&host));
+
+    auto *cw2          = tab->characterWidget();
+    auto *filter2      = tab->findChild<QLineEdit *>(QStringLiteral("chars_filter_edit"));
+    auto *actions_btn2 = tab->findChild<QPushButton *>(
+        QStringLiteral("chars_actions_menu_btn"));
+    auto *actions_menu2
+        = tab->findChild<QMenu *>(QStringLiteral("chars_actions_menu"));
+    QVERIFY(cw2 && filter2 && actions_btn2 && actions_menu2);
+
+    emit cw2->selectionChangedCodePoint(0x0041u);
+    QApplication::processEvents();
+    QVERIFY(actions_btn2->isVisible());
+    bool closed_by_filter = false;
+    QTimer::singleShot(0, tab, [filter2, actions_menu2, &closed_by_filter]() {
+        filter2->setText(QStringLiteral("U+FFFF"));
+        QTest::qWait(120);
+        QApplication::processEvents();
+        closed_by_filter = !actions_menu2->isVisible();
+        if (actions_menu2->isVisible()) {
+            actions_menu2->close();
+        }
+    });
+    actions_btn2->click();
+    QVERIFY(closed_by_filter);
+    QVERIFY(!actions_menu2->isVisible());
+    QCOMPARE(cw2->selectedCodePoint(), quint32(0));
+
+    filter2->clear();
+    QTest::qWait(120);
+    if (QWidget *fw_init = QApplication::focusWidget()) {
+        fw_init->clearFocus();
+    }
+    QApplication::processEvents();
+    QTest::keyClick(tab, Qt::Key_Home);
+    QApplication::processEvents();
+    QCOMPARE(cw2->selectedCodePoint(), quint32(0x0041u));
+
+    slider->setFocus(Qt::TabFocusReason);
+    QApplication::processEvents();
+    QTest::keyClick(slider, Qt::Key_Right);
+    QApplication::processEvents();
+    QCOMPARE(cw2->selectedCodePoint(), quint32(0x0041u));
+
+    tab_bar->setFocus(Qt::TabFocusReason);
+    QApplication::processEvents();
+    QTest::keyClick(tab_bar, Qt::Key_Right);
+    QApplication::processEvents();
+    QCOMPARE(cw2->selectedCodePoint(), quint32(0x0041u));
+
+    // 3) Unicode unassigned naming consistency & deferred glyph-name loading.
+    QCOMPARE(unicode_blocks::blockName(0x2FE5u),
+             QStringLiteral("Unassigned / Other"));
+    QCOMPARE(unicode_blocks::blockName(0x110000u),
+             QStringLiteral("Unknown Block"));
+
+    CharacterGridModel model;
+    model.setAllCodePoints({0x2FE5u, 0x0041u}, {15u, 10u});
+    model.setGlyphNames({QStringLiteral("gap"), QStringLiteral("latinA")});
+    QVERIFY(model.setSearchQuery(QStringLiteral("unassigned")));
+    QCOMPARE(model.filteredCodePoints(), QVector<quint32>({0x2FE5u}));
+
+    const QString roboto_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!roboto_path.isEmpty());
+    QFile rob_f(roboto_path);
+    QVERIFY(rob_f.open(QIODevice::ReadOnly));
+    QByteArray named_sfnt = rob_f.readAll();
+
+    const QRawFont raw_rob(roboto_path, 16);
+    const QVector<quint32> a_gids
+        = raw_rob.glyphIndexesForString(QStringLiteral("A"));
+    QVERIFY(!a_gids.isEmpty() && a_gids[0] != 0);
+    const quint32 gid_a = a_gids[0];
+
+    const int post_dir_off = findSfntTableDirOffset(named_sfnt, "post");
+    const int maxp_dir_off = findSfntTableDirOffset(named_sfnt, "maxp");
+    QVERIFY(post_dir_off >= 0 && maxp_dir_off >= 0);
+    const quint32 maxp_off   = readU32Be(named_sfnt, maxp_dir_off + 8);
+    const quint16 num_glyphs = readU16Be(named_sfnt, int(maxp_off) + 4);
+    QVERIFY(num_glyphs > gid_a);
+
+    QByteArray post2(32, '\0');
+    post2[0] = 0x00;
+    post2[1] = 0x02;
+    appendU16(post2, num_glyphs);
+    for (quint16 g = 0; g < num_glyphs; ++g) {
+        appendU16(post2, g == gid_a ? 258 : 0);
+    }
+    const QByteArray a_name("LatinCapA");
+    post2.append(char(a_name.size()));
+    post2.append(a_name);
+    while (named_sfnt.size() % 4 != 0) {
+        named_sfnt.append('\0');
+    }
+    const quint32 post2_off = quint32(named_sfnt.size());
+    named_sfnt.append(post2);
+    writeU32Be(named_sfnt, post_dir_off + 8, post2_off);
+    writeU32Be(named_sfnt, post_dir_off + 12, quint32(post2.size()));
+
+    QTemporaryDir named_dir;
+    QVERIFY(named_dir.isValid());
+    const QString named_path = named_dir.filePath(QStringLiteral("named_post2.ttf"));
+    QFile named_file(named_path);
+    QVERIFY(named_file.open(QIODevice::WriteOnly));
+    QCOMPARE(named_file.write(named_sfnt), qint64(named_sfnt.size()));
+    named_file.close();
+
+    FontWidget fw;
+    QVERIFY(fw.init(named_path));
+    fw.resize(760, 560);
+    fw.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&fw));
+    auto *fw_tabs  = fw.findChild<QTabWidget *>();
+    auto *fw_chars = fw.findChild<CharactersTab *>();
+    auto *fw_cw    = fw.findChild<CharacterWidget *>();
+    auto *fw_name  = fw_chars->findChild<QPushButton *>(
+        QStringLiteral("chars_meta_name_btn"));
+    QVERIFY(fw_tabs && fw_chars && fw_cw && fw_name);
+
+    fw_tabs->setCurrentWidget(fw_chars);
+    QApplication::processEvents();
+    emit fw_cw->selectionChangedCodePoint(quint32('A'));
+    QApplication::processEvents();
+    QCOMPARE(fw_name->text(), QStringLiteral("LatinCapA"));
+}
+
+void ViewerTest::reviewFixesHostPixelFontsNarrowBoundsAndSvgExportLifetime()
+{
+    // 1) Host pixelSize scaling & dynamic FontChange at constant m_dpr=1.0
+    // propagate across FeaturePillButton, GuidePillButton, empty-state label,
+    // ValueBadge, VariableAxesBar, MetaCopyChip, m_sel_meta, and action spacer.
+    QWidget host;
+    QFont px_font_1x = host.font();
+    px_font_1x.setPixelSize(12);
+    host.setFont(px_font_1x);
+
+    auto *vbox = new QVBoxLayout(&host);
+    auto *feat_bar = new OpenTypeFeaturesBar(&host);
+    feat_bar->rebuild({{QByteArrayLiteral("liga"), QStringLiteral("Standard Ligatures"), true}});
+
+    auto *gi = new GlyphInspectorWidget(&host);
+    auto *chars_tab = new CharactersTab(&host);
+    chars_tab->setCodePoints({0x0041u, 0xE88Au}, {10u, 11u},
+                             {QStringLiteral("A"), QStringLiteral("very_long_glyph_name_for_elision_check")});
+    auto *text_tab = new TextPreviewTab(&host);
+
+    FontInspectorEngine engine;
+    const QString vf_path = fixturePath("NotoSans-VariableFont_wdth,wght.ttf");
+    QString vf_family;
+    int vf_id = -1;
+    if (!vf_path.isEmpty() && engine.openFile(vf_path)) {
+        vf_id = QFontDatabase::addApplicationFont(vf_path);
+        const QStringList fams = vf_id >= 0 ? QFontDatabase::applicationFontFamilies(vf_id) : QStringList{};
+        if (!fams.isEmpty()) {
+            vf_family = fams.first();
+        }
+    }
+    auto *axes_bar = new VariableAxesBar(&host);
+    if (!vf_family.isEmpty()) {
+        axes_bar->rebuild(engine, 0, vf_family, true);
+    }
+
+    vbox->addWidget(feat_bar);
+    vbox->addWidget(gi);
+    vbox->addWidget(chars_tab, 1);
+    vbox->addWidget(text_tab, 1);
+    vbox->addWidget(axes_bar);
+
+    host.resize(640, 720);
+    host.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&host));
+
+    QLabel *axes_val_lbl = nullptr;
+    int axes_val_min_w_1x = 0;
+    for (QLabel *lbl : axes_bar->findChildren<QLabel *>()) {
+        if ((lbl->alignment() & Qt::AlignRight) && lbl->minimumWidth() > 0) {
+            axes_val_lbl      = lbl;
+            axes_val_min_w_1x = lbl->minimumWidth();
+            break;
+        }
+    }
+
+    // Apply a 24px host font while m_dpr remains 1.0 -> QEvent::FontChange alone
+    // must refresh widgets that previously called setFont() (WA_SetFont).
+    QFont px_font_2x = host.font();
+    px_font_2x.setPixelSize(24);
+    host.setFont(px_font_2x);
+    QApplication::processEvents();
+
+    auto *cw = chars_tab->characterWidget();
+    QVERIFY(cw != nullptr);
+    emit cw->selectionChangedCodePoint(0xE88Au);
+    QApplication::processEvents();
+
+    for (QPushButton *b : feat_bar->findChildren<QPushButton *>()) {
+        if (b->isCheckable()) {
+            QVERIFY2(b->font().pixelSize() >= 18,
+                     qPrintable(QString::number(b->font().pixelSize())));
+            QCOMPARE(b->font().pointSizeF(), -1.0);
+        }
+    }
+    for (QPushButton *pill : gi->guidePillButtons()) {
+        QVERIFY(pill->font().pixelSize() >= 18);
+        QCOMPARE(pill->font().pointSizeF(), -1.0);
+    }
+    QLabel *gi_empty_lbl = nullptr;
+    for (QLabel *lbl : gi->findChildren<QLabel *>()) {
+        if (lbl->text().contains(QStringLiteral("Select a character"))) {
+            gi_empty_lbl = lbl;
+            break;
+        }
+    }
+    QVERIFY(gi_empty_lbl != nullptr);
+    QVERIFY(gi_empty_lbl->font().pixelSize() >= 28);
+    QCOMPARE(gi_empty_lbl->font().pointSizeF(), -1.0);
+    QVERIFY(gi_empty_lbl->font().italic());
+
+    int chars_badges = 0;
+    for (QLabel *lbl : chars_tab->findChildren<QLabel *>()) {
+        if (auto *badge = dynamic_cast<fontui::ValueBadge *>(lbl)) {
+            QVERIFY(badge->font().pixelSize() >= 18);
+            QCOMPARE(badge->font().pointSizeF(), -1.0);
+            ++chars_badges;
+        }
+    }
+    QVERIFY(chars_badges > 0);
+    int text_badges = 0;
+    for (QLabel *lbl : text_tab->findChildren<QLabel *>()) {
+        if (auto *badge = dynamic_cast<fontui::ValueBadge *>(lbl)) {
+            QVERIFY(badge->font().pixelSize() >= 18);
+            QCOMPARE(badge->font().pointSizeF(), -1.0);
+            ++text_badges;
+        }
+    }
+    QVERIFY(text_badges >= 2);
+    auto *code_chip = chars_tab->findChild<QPushButton *>(QStringLiteral("chars_meta_code_btn"));
+    auto *sel_meta  = chars_tab->findChild<QLabel *>(QStringLiteral("chars_sel_meta"));
+    QVERIFY(code_chip && sel_meta);
+    QCOMPARE(code_chip->font().pixelSize(), 24);
+    QCOMPARE(sel_meta->font().pixelSize(), 24);
+    if (axes_val_lbl) {
+        QVERIFY(axes_val_lbl->minimumWidth() > axes_val_min_w_1x);
+    }
+
+    // Also verify DPR=2.0 scaling for GuideInspector & ultra-narrow CharactersTab
+    // under the 24px host font (Actions button stays strictly inside sel_bar).
+    gi->setDpr(2.0);
+    chars_tab->setDpr(2.0);
+    auto *sel_bar     = chars_tab->findChild<QWidget *>(QStringLiteral("chars_selection_bar"));
+    auto *actions_btn = chars_tab->findChild<QPushButton *>(QStringLiteral("chars_actions_menu_btn"));
+    QVERIFY(sel_bar && actions_btn);
+    for (int w : {240, 210}) {
+        host.resize(w, 720);
+        QApplication::processEvents();
+        QVERIFY(actions_btn->isVisible());
+        QVERIFY(sel_bar->width() <= chars_tab->width() + 1);
+        QVERIFY(actions_btn->geometry().right() <= sel_bar->rect().right());
+    }
+    chars_tab->setDpr(1.0);
+
+    // 2) QTextEdit viewport focus blocks CharactersTab WindowShortcut arrows,
+    // and Escape inside non-empty filter clears without restarting debounce timer.
+    auto *note_edit = new QTextEdit(&host);
+    vbox->addWidget(note_edit);
+    host.resize(640, 760);
+    QApplication::processEvents();
+    cw->setSelectedCodePoint(0x0041u);
+    emit cw->selectionChangedCodePoint(0x0041u);
+    QApplication::processEvents();
+    note_edit->setFocus(Qt::MouseFocusReason);
+    QApplication::processEvents();
+    QTest::keyClick(chars_tab, Qt::Key_Right);
+    QApplication::processEvents();
+    QCOMPARE(cw->selectedCodePoint(), quint32(0x0041u));
+    auto *inner = new QWidget(note_edit->viewport());
+    inner->setFocusPolicy(Qt::ClickFocus);
+    inner->resize(16, 16);
+    inner->show();
+    inner->setFocus(Qt::MouseFocusReason);
+    QApplication::processEvents();
+    QCOMPARE(QApplication::focusWidget(), inner);
+    QTest::keyClick(inner, Qt::Key_Right);
+    QApplication::processEvents();
+    QCOMPARE(cw->selectedCodePoint(), quint32(0x0041u));
+    QTest::keyClick(chars_tab, Qt::Key_Right);
+    QApplication::processEvents();
+    QCOMPARE(cw->selectedCodePoint(), quint32(0x0041u));
+    inner->clearFocus();
+    note_edit->clearFocus();
+
+    auto *filter = chars_tab->findChild<QLineEdit *>(QStringLiteral("chars_filter_edit"));
+    QVERIFY(filter != nullptr);
+    filter->setText(QStringLiteral("0041"));
+    QTest::qWait(200);
+    QCOMPARE(cw->getCharCount(), 1);
+    filter->setFocus(Qt::MouseFocusReason);
+    QTest::keyClick(filter, Qt::Key_Escape);
+    QVERIFY(filter->text().isEmpty());
+    QCOMPARE(cw->getCharCount(), 2);
+    for (QTimer *t : chars_tab->findChildren<QTimer *>()) {
+        QVERIFY(!t->isActive());
+    }
+
+    // 3) SamplePreviewTab style key change triggers rebuild rather than stale
+    // family-only cache, and TextPreviewTab::prepareSvgExport draw_out safely
+    // no-ops if TextPreviewTab is destroyed before invocation.
+    SamplePreviewTab sample_tab;
+    sample_tab.resize(400, 300);
+    QFont f_reg(QStringLiteral("NonExistentCacheProbeFamily"));
+    f_reg.setWeight(QFont::Normal);
+    sample_tab.updateSample(QStringLiteral("NonExistentCacheProbeFamily"), f_reg,
+                            QStringLiteral("AAA"));
+    auto *first_lbl = sample_tab.findChild<QLabel *>(QStringLiteral("label_sample"));
+    QPointer<QLabel> first_guard(first_lbl);
+    QVERIFY(!first_guard.isNull());
+
+    QFont f_bold = f_reg;
+    f_bold.setWeight(QFont::Bold);
+    sample_tab.updateSample(QStringLiteral("NonExistentCacheProbeFamily"), f_bold,
+                            QStringLiteral("AAA"));
+    QVERIFY(first_guard.isNull());
+
+    for (bool waterfall : {false, true}) {
+        auto *ephemeral_text = new TextPreviewTab();
+        ephemeral_text->setWaterfallEnabled(waterfall);
+        ephemeral_text->resize(480, 320);
+        ephemeral_text->show();
+        QApplication::processEvents();
+        QSize svg_sz;
+        QColor svg_bg;
+        std::function<void(QPainter &)> svg_draw;
+        QVERIFY(ephemeral_text->prepareSvgExport(svg_sz, svg_bg, svg_draw));
+        delete ephemeral_text;
+        QImage out_img(qMax(1, svg_sz.width()), qMax(1, svg_sz.height()),
+                       QImage::Format_ARGB32_Premultiplied);
+        QPainter p(&out_img);
+        svg_draw(p);
+        p.end();
+    }
+
+    if (vf_id >= 0) {
+        QFontDatabase::removeApplicationFont(vf_id);
+    }
+}
+
+void ViewerTest::p1OffTabClearSelectionStripAndP2GlyphIdReset()
+{
+    // P1: Updating or clearing selection while CharactersTab is hidden must still
+    // hide chips, separators, and action buttons before the tab is shown.
+    QTabWidget host;
+    auto *other_tab = new QWidget(&host);
+    auto *chars_tab = new CharactersTab(&host);
+    host.addTab(other_tab, QStringLiteral("Other"));
+    host.addTab(chars_tab, QStringLiteral("Characters"));
+    host.resize(760, 480);
+    host.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&host));
+    QCOMPARE(host.currentWidget(), other_tab);
+
+    chars_tab->setCodePoints({0x0041u, 0x0042u}, {10u, 11u},
+                             {QStringLiteral("A"), QStringLiteral("B")});
+    auto *cw       = chars_tab->characterWidget();
+    auto *sel_meta = chars_tab->findChild<QLabel *>(QStringLiteral("chars_sel_meta"));
+    auto *code_btn
+        = chars_tab->findChild<QPushButton *>(QStringLiteral("chars_meta_code_btn"));
+    auto *copy_btn
+        = chars_tab->findChild<QPushButton *>(QStringLiteral("chars_copy_text_btn"));
+    auto *send_btn
+        = chars_tab->findChild<QPushButton *>(QStringLiteral("chars_insert_text_btn"));
+    auto *insp_btn
+        = chars_tab->findChild<QPushButton *>(QStringLiteral("chars_inspect_btn"));
+    auto *act_btn
+        = chars_tab->findChild<QPushButton *>(QStringLiteral("chars_actions_menu_btn"));
+    QVERIFY(cw && sel_meta && code_btn && copy_btn && send_btn && insp_btn
+            && act_btn);
+
+    for (QWidget *w :
+         {static_cast<QWidget *>(code_btn), static_cast<QWidget *>(copy_btn),
+          static_cast<QWidget *>(send_btn), static_cast<QWidget *>(insp_btn),
+          static_cast<QWidget *>(act_btn)}) {
+        QVERIFY(w->isHidden());
+    }
+
+    // Switch to Characters, select a glyph, then switch back off-tab and clear.
+    host.setCurrentWidget(chars_tab);
+    QApplication::processEvents();
+    emit cw->selectionChangedCodePoint(0x0041u);
+    QApplication::processEvents();
+    QVERIFY(code_btn->isVisible() && copy_btn->isVisible()
+            && send_btn->isVisible() && insp_btn->isVisible());
+
+    host.setCurrentWidget(other_tab);
+    QApplication::processEvents();
+    chars_tab->setCodePoints({0x0043u, 0x0044u}, {12u, 13u});
+    QApplication::processEvents();
+
+    host.setCurrentWidget(chars_tab);
+    QApplication::processEvents();
+    for (QWidget *w :
+         {static_cast<QWidget *>(code_btn), static_cast<QWidget *>(copy_btn),
+          static_cast<QWidget *>(send_btn), static_cast<QWidget *>(insp_btn),
+          static_cast<QWidget *>(act_btn)}) {
+        QVERIFY(!w->isVisible());
+    }
+    QVERIFY(sel_meta->isVisible());
+    QVERIFY(sel_meta->text().contains(QStringLiteral("Click or use arrow keys")));
+
+    // Verify block combobox keeps untruncated full text in its tooltip even when
+    // the displayed item text is elided.
+    chars_tab->setCodePoints({0x0041u, 0x1F300u});
+    auto *combo = chars_tab->findChild<QComboBox *>(
+        QStringLiteral("chars_block_combo"));
+    QVERIFY(combo != nullptr);
+    QCOMPARE(combo->toolTip(), QStringLiteral("All Characters (2)"));
+    int long_blk_idx = -1;
+    for (int i = 0; i < combo->count(); ++i) {
+        if (combo->itemData(i, Qt::ToolTipRole)
+                .toString()
+                .startsWith(QStringLiteral("Miscellaneous Symbols and Pictographs"))) {
+            long_blk_idx = i;
+            break;
+        }
+    }
+    QVERIFY(long_blk_idx >= 0);
+    combo->setCurrentIndex(long_blk_idx);
+    QApplication::processEvents();
+    QVERIFY(combo->currentText().endsWith(QChar(0x2026)));
+    QCOMPARE(combo->toolTip(),
+             QStringLiteral("Miscellaneous Symbols and Pictographs (1)"));
+
+    // P2: Falling back to invalid QRawFont resets stale glyph_id from previous inspect.
+    const QString roboto_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!roboto_path.isEmpty());
+    const int rob_id = QFontDatabase::addApplicationFont(roboto_path);
+    QVERIFY(rob_id >= 0);
+    const QStringList fams = QFontDatabase::applicationFontFamilies(rob_id);
+    QVERIFY(!fams.isEmpty());
+
+    GlyphInspectorWidget gi;
+    QFont valid_f(fams.first());
+    valid_f.setPointSize(18);
+    gi.updateGlyph(quint32('A'), valid_f, roboto_path, {}, {});
+    auto *id_lbl
+        = gi.findChild<QLabel *>(QStringLiteral("gi_glyph_id_label"));
+    QVERIFY(id_lbl != nullptr);
+    QVERIFY(id_lbl->text().startsWith(QLatin1Char('#')));
+
+    QFont missing_f(QStringLiteral("__NonExistentGlyphFallbackFamily__"));
+    missing_f.setStyleStrategy(QFont::NoFontMerging);
+    if (!QRawFont::fromFont(missing_f).isValid()) {
+        gi.updateGlyph(quint32('A'), missing_f, QString(), {}, {});
+        QCOMPARE(id_lbl->text(), QStringLiteral("N/A"));
+    }
+
+    // P2: Hidden glyph preview box updated via setDpr(2.0) while unselected must
+    // still contribute full minimumHeight() to selection bar height once selected.
+    CharactersTab dpr_tab;
+    dpr_tab.resize(760, 420);
+    dpr_tab.setCodePoints({0x0041u}, {10u}, {QStringLiteral("A")});
+    dpr_tab.setDpr(2.0);
+    dpr_tab.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dpr_tab));
+    auto *dpr_sel_bar
+        = dpr_tab.findChild<QWidget *>(QStringLiteral("chars_selection_bar"));
+    auto *dpr_cw = dpr_tab.characterWidget();
+    QVERIFY(dpr_sel_bar && dpr_cw);
+    emit dpr_cw->selectionChangedCodePoint(0x0041u);
+    QApplication::processEvents();
+    const int expected_min_h = fontui::dp(24, 2.0) + fontui::dp(12, 2.0);
+    QVERIFY(dpr_sel_bar->height() >= expected_min_h);
+    const QLabel *glyph_lbl = nullptr;
+    for (const QLabel *lbl : dpr_sel_bar->findChildren<QLabel *>()) {
+        if (lbl->objectName().isEmpty() && lbl->text() == QStringLiteral("A")) {
+            glyph_lbl = lbl;
+            break;
+        }
+    }
+    QVERIFY(glyph_lbl != nullptr);
+    QCOMPARE(glyph_lbl->minimumHeight(), fontui::dp(24, 2.0));
+    QCOMPARE(glyph_lbl->height(), fontui::dp(24, 2.0));
+
+    // P2: Full Unicode 16.0 block table & invalid sentinel 0 behavior.
+    QCOMPARE(unicode_blocks::findBlockIndex(0u), -1);
+    QCOMPARE(unicode_blocks::blockName(0u), QStringLiteral("Unknown Block"));
+    QCOMPARE(unicode_blocks::blockName(0x10780u),
+             QStringLiteral("Latin Extended-F"));
+    QCOMPARE(unicode_blocks::blockName(0x17000u), QStringLiteral("Tangut"));
+    QCOMPARE(unicode_blocks::blockName(0x1CC00u),
+             QStringLiteral("Symbols for Legacy Computing Supplement"));
+    QCOMPARE(unicode_blocks::blockName(0x1DF00u),
+             QStringLiteral("Latin Extended-G"));
+    QCOMPARE(unicode_blocks::blockName(0x1E900u), QStringLiteral("Adlam"));
+
+    QFontDatabase::removeApplicationFont(rob_id);
 }
 
 QTEST_MAIN(ViewerTest)

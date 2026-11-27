@@ -81,6 +81,8 @@ set(FONTVIEWER_SOURCES
     bars/variableaxesbar.h
     engine/fontinspectorengine.cpp
     engine/fontinspectorengine.h
+    engine/unicodeblocks.cpp
+    engine/unicodeblocks.h
     fontshortcuts.cpp
     fontshortcuts.h
     fontui.cpp
@@ -90,6 +92,12 @@ set(FONTVIEWER_SOURCES
     fontwidget.cpp
     fontwidget.h
     fontwidget.ui
+    tabs/charactergridmodel.cpp
+    tabs/charactergridmodel.h
+    tabs/characterstab.cpp
+    tabs/characterstab.h
+    tabs/characterstabwidgets.cpp
+    tabs/characterstabwidgets.h
     tabs/characterwidget.cpp
     tabs/characterwidget.h
     tabs/fontpreviewedit.cpp

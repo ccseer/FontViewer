@@ -1,11 +1,13 @@
 #include "glyphinspectorwidget.h"
 
+#include <QEasingCurve>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QLabel>
 #include <QLayout>
 #include <QPainter>
@@ -13,6 +15,7 @@
 #include <QRawFont>
 #include <QResizeEvent>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QtMath>
 
@@ -21,6 +24,7 @@
 #include <limits>
 #include <optional>
 
+#include "engine/unicodeblocks.h"
 #include "fontui.h"
 
 #define qprintt qDebug() << "[GlyphInspector]"
@@ -129,11 +133,9 @@ public:
         setFocusPolicy(Qt::NoFocus);
         setCursor(Qt::ArrowCursor);
         setAttribute(Qt::WA_Hover, true);
-        QFont f = font();
-        f.setPointSizeF(qMax(8.0, f.pointSizeF() - 1.0));
-        setFont(f);
         setShortcut(QKeySequence());
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        syncFont();
     }
 
     void setDpr(qreal dpr)
@@ -143,6 +145,20 @@ public:
             return;
         }
         m_dpr = clamped;
+        syncFont();
+    }
+
+    void syncFont()
+    {
+        if (m_syncing_font) {
+            return;
+        }
+        const QFont f = fontui::scaledCaptionFont(this, m_dpr, -1.0, 8.0, 0.88);
+        if (font() != f) {
+            m_syncing_font = true;
+            setFont(f);
+            m_syncing_font = false;
+        }
         updateGeometry();
         update();
     }
@@ -166,6 +182,16 @@ public:
     }
 
 protected:
+    void changeEvent(QEvent *event) override
+    {
+        QPushButton::changeEvent(event);
+        if (!m_syncing_font
+            && (event->type() == QEvent::FontChange
+                || event->type() == QEvent::StyleChange)) {
+            syncFont();
+        }
+    }
+
     void paintEvent(QPaintEvent *) override
     {
         QPainter painter(this);
@@ -263,8 +289,9 @@ protected:
     }
 
 private:
-    qreal m_dpr = 1.0;
-    bool m_is_outline = false;
+    qreal m_dpr             = 1.0;
+    bool m_is_outline       = false;
+    bool m_syncing_font     = false;
     GlyphGuideId m_guide_id = GlyphGuideId::Baseline;
 };
 
@@ -649,11 +676,89 @@ void configureValueLabel(QLabel *label)
     label->setWordWrap(true);
     label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 }
+
+class ElidingValueLabel : public QLabel {
+public:
+    explicit ElidingValueLabel(QWidget *parent = nullptr) : QLabel(parent)
+    {
+        setWordWrap(false);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    }
+
+    void setFullText(const QString &full_text)
+    {
+        m_full_text = full_text;
+        updateElide();
+        updateGeometry();
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        const QFontMetrics fm = fontMetrics();
+        const int cap_w       = qMax(1, fm.averageCharWidth() * 6);
+        const int w           = m_full_text.isEmpty()
+                                    ? 0
+                                    : qMin(fm.horizontalAdvance(m_full_text) + 2, cap_w);
+        return QSize(w, fm.height());
+    }
+
+    QSize sizeHint() const override
+    {
+        const QFontMetrics fm = fontMetrics();
+        const int cap_w       = qMax(1, fm.averageCharWidth() * 24);
+        const int w           = m_full_text.isEmpty()
+                                    ? 0
+                                    : qMin(fm.horizontalAdvance(m_full_text) + 2, cap_w);
+        return QSize(w, fm.height());
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QLabel::resizeEvent(event);
+        updateElide();
+    }
+
+    void changeEvent(QEvent *event) override
+    {
+        QLabel::changeEvent(event);
+        if (event->type() == QEvent::FontChange
+            || event->type() == QEvent::StyleChange) {
+            updateElide();
+            updateGeometry();
+        }
+    }
+
+private:
+    void updateElide()
+    {
+        if (m_full_text.isEmpty()) {
+            clear();
+            setToolTip(QString());
+            return;
+        }
+        const int w = width();
+        const QString shown
+            = (w > 0) ? fontMetrics().elidedText(m_full_text, Qt::ElideRight, w)
+                      : m_full_text;
+        setText(shown);
+        setToolTip(shown != m_full_text ? m_full_text : QString());
+    }
+
+    QString m_full_text;
+};
 }  // namespace
 
 // GlyphPreviewWidget implementation
 GlyphPreviewWidget::GlyphPreviewWidget(QWidget *parent) : QWidget(parent)
 {
+    m_guide_alphas.fill(1.0);
+    m_guide_from.fill(1.0);
+    m_guide_targets.fill(1.0);
+    m_anim_timer = new QTimer(this);
+    m_anim_timer->setInterval(16);
+    connect(m_anim_timer, &QTimer::timeout, this,
+            &GlyphPreviewWidget::advanceAnimations);
     setMinimumSize(fontui::dp(260, m_dpr), fontui::dp(380, m_dpr));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
@@ -666,36 +771,39 @@ void GlyphPreviewWidget::setDpr(qreal dpr)
     }
     m_dpr = clamped;
     setMinimumSize(fontui::dp(260, m_dpr), fontui::dp(380, m_dpr));
+    updateGeometry();
     update();
 }
 
-void GlyphPreviewWidget::setGlyphData(QChar ch,
+void GlyphPreviewWidget::setGlyphData(quint32 code_point,
                                       const QFont &font,
                                       const QRectF &bbox,
                                       qreal advance_width,
                                       const FontDecorationMetrics &deco,
                                       const GlyphOutlineData &outline)
 {
-    m_char          = ch;
+    m_code_point    = code_point;
     m_font          = font;
     m_bbox          = bbox;
     m_deco_metrics  = deco;
     m_outline       = outline;
     m_advance_width = advance_width;
-    m_has_data      = true;
+    m_has_data      = (code_point != 0);
     update();
 }
 
-void GlyphPreviewWidget::setShowOutlinePoints(bool on)
+void GlyphPreviewWidget::setShowOutlinePoints(bool on, bool animate)
 {
     if (m_show_outline_points == on) {
         return;
     }
     m_show_outline_points = on;
-    update();
+    syncAnimationState(animate);
 }
 
-void GlyphPreviewWidget::setGuideVisible(GlyphGuideId id, bool visible)
+void GlyphPreviewWidget::setGuideVisible(GlyphGuideId id,
+                                         bool visible,
+                                         bool animate)
 {
     if (isGuideVisible(id) == visible) {
         return;
@@ -706,15 +814,108 @@ void GlyphPreviewWidget::setGuideVisible(GlyphGuideId id, bool visible)
     else {
         m_hidden_guides.insert(id);
     }
-    update();
+    syncAnimationState(animate);
 }
 
-void GlyphPreviewWidget::setHiddenGuides(const QSet<GlyphGuideId> &hidden)
+void GlyphPreviewWidget::setHiddenGuides(const QSet<GlyphGuideId> &hidden,
+                                         bool animate)
 {
     if (m_hidden_guides == hidden) {
         return;
     }
     m_hidden_guides = hidden;
+    syncAnimationState(animate);
+}
+
+qreal GlyphPreviewWidget::guideOpacity(GlyphGuideId id) const
+{
+    const int idx = static_cast<int>(id);
+    return (idx >= 0 && idx < kGuideCount) ? m_guide_alphas[size_t(idx)] : 1.0;
+}
+
+bool GlyphPreviewWidget::isGuideAnimating() const
+{
+    return m_anim_timer && m_anim_timer->isActive();
+}
+
+void GlyphPreviewWidget::syncAnimationState(bool animate)
+{
+    std::array<qreal, kGuideCount> next_targets{};
+    for (int i = 0; i < kGuideCount; ++i) {
+        const auto id    = static_cast<GlyphGuideId>(i);
+        next_targets[size_t(i)] = isGuideVisible(id) ? 1.0 : 0.0;
+    }
+    const qreal next_outline = m_show_outline_points ? 1.0 : 0.0;
+
+    if (!animate || !isVisible() || !m_has_data) {
+        if (m_anim_timer && m_anim_timer->isActive()) {
+            m_anim_timer->stop();
+        }
+        m_guide_from     = next_targets;
+        m_guide_targets  = next_targets;
+        m_guide_alphas   = next_targets;
+        m_outline_from   = next_outline;
+        m_outline_target = next_outline;
+        m_outline_alpha  = next_outline;
+        update();
+        return;
+    }
+
+    if (next_targets == m_guide_targets
+        && qFuzzyCompare(next_outline + 1.0, m_outline_target + 1.0)) {
+        return;
+    }
+
+    m_guide_from     = m_guide_alphas;
+    m_guide_targets  = next_targets;
+    m_outline_from   = m_outline_alpha;
+    m_outline_target = next_outline;
+
+    bool needs_anim = qAbs(m_outline_from - m_outline_target) > 0.001;
+    for (int i = 0; !needs_anim && i < kGuideCount; ++i) {
+        if (qAbs(m_guide_from[size_t(i)] - m_guide_targets[size_t(i)])
+            > 0.001) {
+            needs_anim = true;
+        }
+    }
+    if (needs_anim) {
+        m_anim_clock.restart();
+        if (m_anim_timer && !m_anim_timer->isActive()) {
+            m_anim_timer->start();
+        }
+    }
+    else {
+        if (m_anim_timer && m_anim_timer->isActive()) {
+            m_anim_timer->stop();
+        }
+        m_guide_alphas  = m_guide_targets;
+        m_outline_alpha = m_outline_target;
+    }
+    update();
+}
+
+void GlyphPreviewWidget::advanceAnimations()
+{
+    const qreal t
+        = qBound(0.0, qreal(m_anim_clock.elapsed()) / kAnimDurationMs, 1.0);
+    const qreal eased
+        = QEasingCurve(QEasingCurve::OutCubic).valueForProgress(t);
+    for (int i = 0; i < kGuideCount; ++i) {
+        const size_t idx   = size_t(i);
+        m_guide_alphas[idx]
+            = m_guide_from[idx]
+              + (m_guide_targets[idx] - m_guide_from[idx]) * eased;
+    }
+    m_outline_alpha
+        = m_outline_from + (m_outline_target - m_outline_from) * eased;
+
+    if (t >= 1.0) {
+        m_guide_alphas  = m_guide_targets;
+        m_outline_alpha = m_outline_target;
+        if (m_anim_timer) {
+            m_anim_timer->stop();
+        }
+    }
     update();
 }
 
@@ -727,12 +928,25 @@ void GlyphPreviewWidget::clear()
     m_last_underline_band = {};
     m_last_strikeout_band = {};
     m_last_outline_points.clear();
-    update();
+    syncAnimationState(false);
 }
 
 QSize GlyphPreviewWidget::sizeHint() const
 {
-    return QSize(420, 440);
+    return QSize(fontui::dp(420, m_dpr), fontui::dp(440, m_dpr));
+}
+
+void GlyphPreviewWidget::hideEvent(QHideEvent *event)
+{
+    QWidget::hideEvent(event);
+    if (m_anim_timer && m_anim_timer->isActive()) {
+        m_anim_timer->stop();
+        m_guide_alphas  = m_guide_targets;
+        m_guide_from    = m_guide_targets;
+        m_outline_alpha = m_outline_target;
+        m_outline_from  = m_outline_target;
+        update();
+    }
 }
 
 void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
@@ -774,9 +988,12 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     qreal display_descent = display_fm.descent();
 
     bool use_strict = false;
-    if (display_raw.isValid()) {
-        QString str(m_char);
-        QVector<quint32> indexes = display_raw.glyphIndexesForString(str);
+    const QString glyph_str
+        = (m_code_point > 0 && m_code_point <= 0x10FFFFu)
+              ? QString::fromUcs4(&m_code_point, 1)
+              : QString();
+    if (display_raw.isValid() && !glyph_str.isEmpty()) {
+        QVector<quint32> indexes = display_raw.glyphIndexesForString(glyph_str);
         if (!indexes.isEmpty()) {
             quint32 index = indexes[0];
             const QVector<QPointF> advances
@@ -795,10 +1012,9 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
 
     if (!use_strict) {
         QFontMetricsF base_fm(m_font, this);
-        qreal sx = base_fm.horizontalAdvance(m_char) > 0
-                       ? qreal(display_fm.horizontalAdvance(m_char))
-                             / base_fm.horizontalAdvance(m_char)
-                       : 1.0;
+        const qreal base_adv = base_fm.horizontalAdvance(glyph_str);
+        const qreal disp_adv = display_fm.horizontalAdvance(glyph_str);
+        qreal sx             = base_adv > 0 ? disp_adv / base_adv : 1.0;
         qreal sy = base_fm.height() > 0
                        ? qreal(display_fm.height()) / base_fm.height()
                        : 1.0;
@@ -806,7 +1022,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         display_advance = m_advance_width * sx;
         glyph_box       = QRectF(m_bbox.x() * sx, m_bbox.y() * sy,
                                  m_bbox.width() * sx, m_bbox.height() * sy);
-        text_x          = center_x - display_fm.horizontalAdvance(m_char) / 2.0;
+        text_x          = center_x - disp_adv / 2.0;
         text_y = center_y + (display_fm.ascent() - display_fm.descent()) / 2.0;
     }
 
@@ -829,14 +1045,37 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     const qreal pad_20       = fontui::dpf(20.0, dpr);
     const qreal pad_30       = fontui::dpf(30.0, dpr);
     const qreal stroke_1     = fontui::dpf(1.0, dpr);
+    auto guideAlpha          = [&](GlyphGuideId id) -> qreal {
+        const int idx = static_cast<int>(id);
+        return (idx >= 0 && idx < kGuideCount) ? m_guide_alphas[size_t(idx)]
+                                                        : 1.0;
+    };
+    auto scaleAlpha = [](QColor c, qreal factor) -> QColor {
+        if (factor < 0.999) {
+            c.setAlpha(qBound(0, qRound(c.alpha() * factor), 255));
+        }
+        return c;
+    };
+
+    const qreal adv_alpha    = guideAlpha(GlyphGuideId::Advance);
+    const qreal ul_alpha     = guideAlpha(GlyphGuideId::Underline);
+    const qreal st_alpha     = guideAlpha(GlyphGuideId::Strikeout);
+    const qreal base_alpha   = guideAlpha(GlyphGuideId::Baseline);
+    const qreal center_alpha = guideAlpha(GlyphGuideId::Center);
+    const qreal asc_alpha    = guideAlpha(GlyphGuideId::Ascent);
+    const qreal desc_alpha   = guideAlpha(GlyphGuideId::Descent);
+    const qreal cap_alpha    = guideAlpha(GlyphGuideId::CapHeight);
+    const qreal xh_alpha     = guideAlpha(GlyphGuideId::XHeight);
+    const qreal bbox_alpha   = guideAlpha(GlyphGuideId::BBox);
+    const qreal sb_alpha     = guideAlpha(GlyphGuideId::Bearings);
 
     // Draw advance width rectangle (subtle fill)
-    if (isGuideVisible(GlyphGuideId::Advance)) {
+    if (adv_alpha > 0.005) {
         QColor adv_fill = adv_clr;
         adv_fill.setAlpha(dark ? 12 : 16);
         painter.fillRect(QRectF(text_x, pad_20, display_advance,
                                 rect.height() - pad_20 * 2.0),
-                         adv_fill);
+                         scaleAlpha(adv_fill, adv_alpha));
     }
 
     // Derive em pixel size from the same font size source used to draw the glyph.
@@ -859,55 +1098,63 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     bool draw_strikeout    = false;
 
     if (upem > 0 && em_px > 0.0 && band_width > 0.0) {
-        if (m_deco_metrics.has_underline
-            && isGuideVisible(GlyphGuideId::Underline)) {
+        const bool ul_logical = isGuideVisible(GlyphGuideId::Underline);
+        if (m_deco_metrics.has_underline && (ul_logical || ul_alpha > 0.005)) {
             underline_top_y
                 = text_y
                   - (qreal(m_deco_metrics.underline_pos) / upem) * em_px;
             const qreal band_h = qMax(
                 1.0, (qreal(m_deco_metrics.underline_thick) / upem) * em_px);
             const QRectF ul_rect(pad_10, underline_top_y, band_width, band_h);
-            QColor ul_fill = ul_clr;
-            ul_fill.setAlpha(38);
-            painter.fillRect(ul_rect, ul_fill);
-            QColor ul_line = ul_clr;
-            ul_line.setAlpha(190);
-            QPen ul_pen(ul_line);
-            ul_pen.setStyle(Qt::DashLine);
-            ul_pen.setWidthF(stroke_1);
-            painter.setPen(ul_pen);
-            painter.drawLine(QPointF(pad_10, underline_top_y),
-                             QPointF(rect.width() - pad_10, underline_top_y));
-            m_last_underline_band = ul_rect;
-            draw_underline        = true;
+            if (ul_alpha > 0.005) {
+                QColor ul_fill = ul_clr;
+                ul_fill.setAlpha(38);
+                painter.fillRect(ul_rect, scaleAlpha(ul_fill, ul_alpha));
+                QColor ul_line = ul_clr;
+                ul_line.setAlpha(190);
+                QPen ul_pen(scaleAlpha(ul_line, ul_alpha));
+                ul_pen.setStyle(Qt::DashLine);
+                ul_pen.setWidthF(stroke_1);
+                painter.setPen(ul_pen);
+                painter.drawLine(QPointF(pad_10, underline_top_y),
+                                 QPointF(rect.width() - pad_10, underline_top_y));
+            }
+            if (ul_logical) {
+                m_last_underline_band = ul_rect;
+            }
+            draw_underline = true;
         }
-        if (m_deco_metrics.has_strikeout
-            && isGuideVisible(GlyphGuideId::Strikeout)) {
+        const bool st_logical = isGuideVisible(GlyphGuideId::Strikeout);
+        if (m_deco_metrics.has_strikeout && (st_logical || st_alpha > 0.005)) {
             strike_top_y
                 = text_y
                   - (qreal(m_deco_metrics.strikeout_pos) / upem) * em_px;
             const qreal band_h = qMax(
                 1.0, (qreal(m_deco_metrics.strikeout_size) / upem) * em_px);
             const QRectF st_rect(pad_10, strike_top_y, band_width, band_h);
-            QColor st_fill = st_clr;
-            st_fill.setAlpha(38);
-            painter.fillRect(st_rect, st_fill);
-            QColor st_line = st_clr;
-            st_line.setAlpha(190);
-            QPen st_pen(st_line);
-            st_pen.setStyle(Qt::DashLine);
-            st_pen.setWidthF(stroke_1);
-            painter.setPen(st_pen);
-            painter.drawLine(QPointF(pad_10, strike_top_y),
-                             QPointF(rect.width() - pad_10, strike_top_y));
-            m_last_strikeout_band = st_rect;
-            draw_strikeout        = true;
+            if (st_alpha > 0.005) {
+                QColor st_fill = st_clr;
+                st_fill.setAlpha(38);
+                painter.fillRect(st_rect, scaleAlpha(st_fill, st_alpha));
+                QColor st_line = st_clr;
+                st_line.setAlpha(190);
+                QPen st_pen(scaleAlpha(st_line, st_alpha));
+                st_pen.setStyle(Qt::DashLine);
+                st_pen.setWidthF(stroke_1);
+                painter.setPen(st_pen);
+                painter.drawLine(QPointF(pad_10, strike_top_y),
+                                 QPointF(rect.width() - pad_10, strike_top_y));
+            }
+            if (st_logical) {
+                m_last_strikeout_band = st_rect;
+            }
+            draw_strikeout = true;
         }
     }
 
     // Draw baseline (dashed line) - horizontal through text baseline
-    if (isGuideVisible(GlyphGuideId::Baseline)) {
-        QPen baseline_pen(muted_guide);
+    if (base_alpha > 0.005) {
+        QPen baseline_pen(scaleAlpha(muted_guide, base_alpha));
         baseline_pen.setStyle(Qt::DashLine);
         baseline_pen.setWidthF(stroke_1);
         painter.setPen(baseline_pen);
@@ -916,8 +1163,8 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     }
 
     // Draw vertical center line (dotted)
-    if (isGuideVisible(GlyphGuideId::Center)) {
-        QPen center_pen(muted_guide);
+    if (center_alpha > 0.005) {
+        QPen center_pen(scaleAlpha(muted_guide, center_alpha));
         center_pen.setStyle(Qt::DotLine);
         center_pen.setWidthF(stroke_1);
         painter.setPen(center_pen);
@@ -926,10 +1173,10 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     }
 
     // Draw advance width vertical lines
-    if (isGuideVisible(GlyphGuideId::Advance)) {
+    if (adv_alpha > 0.005) {
         QColor adv_line = adv_clr;
         adv_line.setAlpha(dark ? 120 : 140);
-        QPen advance_pen(adv_line);
+        QPen advance_pen(scaleAlpha(adv_line, adv_alpha));
         advance_pen.setStyle(Qt::DashLine);
         advance_pen.setWidthF(stroke_1);
         painter.setPen(advance_pen);
@@ -942,10 +1189,10 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
 
     // Draw ascent line (above baseline)
     qreal ascent_y = text_y - display_ascent;
-    if (isGuideVisible(GlyphGuideId::Ascent)) {
+    if (asc_alpha > 0.005) {
         QColor asc_line = ascent_clr;
         asc_line.setAlpha(dark ? 120 : 140);
-        QPen ascent_pen(asc_line);
+        QPen ascent_pen(scaleAlpha(asc_line, asc_alpha));
         ascent_pen.setStyle(Qt::DotLine);
         ascent_pen.setWidthF(stroke_1);
         painter.setPen(ascent_pen);
@@ -955,10 +1202,10 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
 
     // Draw descent line (below baseline)
     qreal descent_y = text_y + display_descent;
-    if (isGuideVisible(GlyphGuideId::Descent)) {
+    if (desc_alpha > 0.005) {
         QColor desc_line = descent_clr;
         desc_line.setAlpha(dark ? 120 : 140);
-        QPen descent_pen(desc_line);
+        QPen descent_pen(scaleAlpha(desc_line, desc_alpha));
         descent_pen.setStyle(Qt::DotLine);
         descent_pen.setWidthF(stroke_1);
         painter.setPen(descent_pen);
@@ -971,10 +1218,10 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         = isGuideAvailableWithMetrics(GlyphGuideId::CapHeight, display_fm,
                                       display_ascent, m_deco_metrics);
     qreal cap_y = text_y - display_fm.capHeight();
-    if (has_cap && isGuideVisible(GlyphGuideId::CapHeight)) {
+    if (has_cap && cap_alpha > 0.005) {
         QColor cap_line = cap_clr;
         cap_line.setAlpha(dark ? 120 : 140);
-        QPen cap_pen(cap_line);
+        QPen cap_pen(scaleAlpha(cap_line, cap_alpha));
         cap_pen.setStyle(Qt::DotLine);
         cap_pen.setWidthF(stroke_1);
         painter.setPen(cap_pen);
@@ -987,10 +1234,10 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
         = isGuideAvailableWithMetrics(GlyphGuideId::XHeight, display_fm,
                                       display_ascent, m_deco_metrics);
     qreal x_y = text_y - display_fm.xHeight();
-    if (has_xheight && isGuideVisible(GlyphGuideId::XHeight)) {
+    if (has_xheight && xh_alpha > 0.005) {
         QColor xh_line = xh_clr;
         xh_line.setAlpha(dark ? 120 : 140);
-        QPen x_pen(xh_line);
+        QPen x_pen(scaleAlpha(xh_line, xh_alpha));
         x_pen.setStyle(Qt::DotLine);
         x_pen.setWidthF(stroke_1);
         painter.setPen(x_pen);
@@ -999,8 +1246,8 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     }
 
     // Draw bounding box (green) - actual glyph bounds
-    if (isGuideVisible(GlyphGuideId::BBox)) {
-        QPen bbox_pen(bbox_clr);
+    if (bbox_alpha > 0.005) {
+        QPen bbox_pen(scaleAlpha(bbox_clr, bbox_alpha));
         bbox_pen.setStyle(Qt::DashDotLine);
         bbox_pen.setWidthF(stroke_1);
         painter.setPen(bbox_pen);
@@ -1008,10 +1255,10 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     }
 
     // Draw bearing markers
-    if (isGuideVisible(GlyphGuideId::Bearings)) {
+    if (sb_alpha > 0.005) {
         QColor bearing_line = sb_clr;
         bearing_line.setAlpha(dark ? 80 : 110);
-        QPen bearing_pen(bearing_line);
+        QPen bearing_pen(scaleAlpha(bearing_line, sb_alpha));
         bearing_pen.setStyle(Qt::DotLine);
         bearing_pen.setWidthF(stroke_1);
         painter.setPen(bearing_pen);
@@ -1024,7 +1271,7 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     // Draw the glyph
     painter.setFont(display_font);
     painter.setPen(pal.text().color());
-    painter.drawText(QPointF(text_x, text_y), QString(m_char));
+    painter.drawText(QPointF(text_x, text_y), glyph_str);
 
     // Overlay FreeType Bezier control points and tangent handles on top of the
     // glyph and underneath metric labels when toggled on.
@@ -1033,8 +1280,8 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
                                  : (display_raw.isValid()
                                         ? qRound(display_raw.unitsPerEm())
                                         : 0);
-    if (m_show_outline_points && m_outline.valid && outline_upem > 0
-        && em_px > 0.0 && !m_outline.points.isEmpty()
+    if ((m_show_outline_points || m_outline_alpha > 0.005) && m_outline.valid
+        && outline_upem > 0 && em_px > 0.0 && !m_outline.points.isEmpty()
         && m_outline.tags.size() == m_outline.points.size()) {
         const qreal scale = em_px / outline_upem;
         QVector<QPointF> screen_pts;
@@ -1043,67 +1290,78 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
             screen_pts.append(
                 QPointF(text_x + fp.x() * scale, text_y - fp.y() * scale));
         }
-        m_last_outline_points = screen_pts;
+        if (m_show_outline_points) {
+            m_last_outline_points = screen_pts;
+        }
 
-        QPen handle_pen(QColor(230, 125, 35, 165));
-        handle_pen.setWidthF(stroke_1);
-        painter.setPen(handle_pen);
-        int contour_start = 0;
-        for (int contour_end : m_outline.contour_ends) {
-            if (contour_start < 0 || contour_end < contour_start
-                || contour_end >= screen_pts.size()) {
-                continue;
-            }
-            const int count = contour_end - contour_start + 1;
-            if (count >= 2) {
-                for (int i = contour_start; i <= contour_end; ++i) {
-                    const int next
-                        = (i == contour_end) ? contour_start : (i + 1);
-                    if (m_outline.tags[i]
-                            == GlyphOutlineData::PointKind::OffCubic
-                        && m_outline.tags[next]
-                               == GlyphOutlineData::PointKind::OffCubic) {
-                        continue;
-                    }
-                    if (m_outline.tags[i]
-                            != GlyphOutlineData::PointKind::OnCurve
-                        || m_outline.tags[next]
-                               != GlyphOutlineData::PointKind::OnCurve) {
-                        painter.drawLine(screen_pts[i], screen_pts[next]);
+        if (m_outline_alpha > 0.005) {
+            QPen handle_pen(
+                scaleAlpha(QColor(230, 125, 35, 165), m_outline_alpha));
+            handle_pen.setWidthF(stroke_1);
+            painter.setPen(handle_pen);
+            int contour_start = 0;
+            for (int contour_end : m_outline.contour_ends) {
+                if (contour_start < 0 || contour_end < contour_start
+                    || contour_end >= screen_pts.size()) {
+                    continue;
+                }
+                const int count = contour_end - contour_start + 1;
+                if (count >= 2) {
+                    for (int i = contour_start; i <= contour_end; ++i) {
+                        const int next
+                            = (i == contour_end) ? contour_start : (i + 1);
+                        if (m_outline.tags[i]
+                                == GlyphOutlineData::PointKind::OffCubic
+                            && m_outline.tags[next]
+                                   == GlyphOutlineData::PointKind::OffCubic) {
+                            continue;
+                        }
+                        if (m_outline.tags[i]
+                                != GlyphOutlineData::PointKind::OnCurve
+                            || m_outline.tags[next]
+                                   != GlyphOutlineData::PointKind::OnCurve) {
+                            painter.drawLine(screen_pts[i], screen_pts[next]);
+                        }
                     }
                 }
+                contour_start = contour_end + 1;
             }
-            contour_start = contour_end + 1;
-        }
 
-        const QColor base_col = pal.base().color();
-        const qreal pt_r      = fontui::dpf(2.5, dpr);
-        const qreal pt_side   = fontui::dpf(5.0, dpr);
-        for (int i = 0; i < screen_pts.size(); ++i) {
-            const QPointF &pt = screen_pts[i];
-            if (m_outline.tags[i] == GlyphOutlineData::PointKind::OnCurve) {
-                painter.setPen(QPen(
-                    dark ? QColor(255, 255, 255, 220) : QColor(20, 40, 70, 220),
-                    stroke_1));
-                painter.setBrush(QColor(35, 145, 255));
-                painter.drawRect(
-                    QRectF(pt.x() - pt_r, pt.y() - pt_r, pt_side, pt_side));
+            const QColor base_col
+                = scaleAlpha(pal.base().color(), m_outline_alpha);
+            const QColor on_stroke
+                = scaleAlpha(dark ? QColor(255, 255, 255, 220)
+                                  : QColor(20, 40, 70, 220),
+                             m_outline_alpha);
+            const QColor on_fill
+                = scaleAlpha(QColor(35, 145, 255), m_outline_alpha);
+            const QColor off_stroke
+                = scaleAlpha(QColor(230, 125, 35), m_outline_alpha);
+            const qreal pt_r    = fontui::dpf(2.5, dpr);
+            const qreal pt_side = fontui::dpf(5.0, dpr);
+            for (int i = 0; i < screen_pts.size(); ++i) {
+                const QPointF &pt = screen_pts[i];
+                if (m_outline.tags[i] == GlyphOutlineData::PointKind::OnCurve) {
+                    painter.setPen(QPen(on_stroke, stroke_1));
+                    painter.setBrush(on_fill);
+                    painter.drawRect(
+                        QRectF(pt.x() - pt_r, pt.y() - pt_r, pt_side, pt_side));
+                }
+                else {
+                    painter.setPen(QPen(off_stroke, fontui::dpf(1.5, dpr)));
+                    painter.setBrush(base_col);
+                    painter.drawEllipse(pt, pt_r, pt_r);
+                }
             }
-            else {
-                painter.setPen(
-                    QPen(QColor(230, 125, 35), fontui::dpf(1.5, dpr)));
-                painter.setBrush(base_col);
-                painter.drawEllipse(pt, pt_r, pt_r);
-            }
+            painter.setBrush(Qt::NoBrush);
         }
-        painter.setBrush(Qt::NoBrush);
     }
 
     // Draw metric labels measured against the widget font and kept within
     // bounds without overlapping each other.
     painter.save();
-    QFont label_font = this->font();
-    label_font.setPointSize(8);
+    const QFont label_font
+        = fontui::scaledCaptionFont(this, dpr, -1.0, 8.0, 0.80);
     painter.setFont(label_font);
     const QFontMetricsF label_fm(label_font, this);
     const qreal safe_inset   = fontui::dpf(4.0, dpr);
@@ -1121,7 +1379,11 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
     };
 
     auto drawMetricLabel = [&](qreal y, const QString &text, QColor color,
-                               bool isAbove) {
+                               bool isAbove, bool record_logical,
+                               qreal alpha) {
+        if (!record_logical && alpha <= 0.005) {
+            return;
+        }
         const qreal h = qCeil(label_fm.height()) + step_pad;
         if (safe_bounds.width() <= safe_inset || safe_bounds.height() < h) {
             return;
@@ -1135,47 +1397,64 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
             preferred, safe_bounds, isAbove ? -(h + step_pad) : (h + step_pad),
             occupied_labels, true);
 
-        occupied_labels.append(r);
-        m_last_label_rects.append(r);
-        m_last_label_texts.append(text);
-        painter.setPen(color);
-        painter.drawText(r, Qt::AlignRight | Qt::AlignVCenter, elided);
+        if (record_logical) {
+            occupied_labels.append(r);
+            m_last_label_rects.append(r);
+            m_last_label_texts.append(text);
+        }
+        if (alpha > 0.005) {
+            painter.setPen(scaleAlpha(color, alpha));
+            painter.drawText(r, Qt::AlignRight | Qt::AlignVCenter, elided);
+        }
     };
 
     // Priority order places core baseline/extents first, then secondary metrics.
-    if (isGuideVisible(GlyphGuideId::Baseline)) {
-        drawMetricLabel(text_y, "baseline", muted_guide, true);
+    if (isGuideVisible(GlyphGuideId::Baseline) || base_alpha > 0.005) {
+        drawMetricLabel(text_y, "baseline", muted_guide, true,
+                        isGuideVisible(GlyphGuideId::Baseline), base_alpha);
     }
-    if (isGuideVisible(GlyphGuideId::Ascent)) {
-        drawMetricLabel(ascent_y, "ascent", ascent_clr, true);
+    if (isGuideVisible(GlyphGuideId::Ascent) || asc_alpha > 0.005) {
+        drawMetricLabel(ascent_y, "ascent", ascent_clr, true,
+                        isGuideVisible(GlyphGuideId::Ascent), asc_alpha);
     }
-    if (isGuideVisible(GlyphGuideId::Descent)) {
-        drawMetricLabel(descent_y, "descent", descent_clr, false);
+    if (isGuideVisible(GlyphGuideId::Descent) || desc_alpha > 0.005) {
+        drawMetricLabel(descent_y, "descent", descent_clr, false,
+                        isGuideVisible(GlyphGuideId::Descent), desc_alpha);
     }
-    if (has_cap && isGuideVisible(GlyphGuideId::CapHeight)) {
-        drawMetricLabel(cap_y, "cap height", cap_clr, true);
+    if (has_cap
+        && (isGuideVisible(GlyphGuideId::CapHeight) || cap_alpha > 0.005)) {
+        drawMetricLabel(cap_y, "cap height", cap_clr, true,
+                        isGuideVisible(GlyphGuideId::CapHeight), cap_alpha);
     }
-    if (has_xheight && isGuideVisible(GlyphGuideId::XHeight)) {
-        drawMetricLabel(x_y, "x-height", xh_clr, true);
+    if (has_xheight
+        && (isGuideVisible(GlyphGuideId::XHeight) || xh_alpha > 0.005)) {
+        drawMetricLabel(x_y, "x-height", xh_clr, true,
+                        isGuideVisible(GlyphGuideId::XHeight), xh_alpha);
     }
     if (draw_strikeout) {
         drawMetricLabel(strike_top_y,
                         QString("strikeout (%1/%2)")
                             .arg(m_deco_metrics.strikeout_pos)
                             .arg(m_deco_metrics.strikeout_size),
-                        st_clr, true);
+                        st_clr, true, isGuideVisible(GlyphGuideId::Strikeout),
+                        st_alpha);
     }
     if (draw_underline) {
         drawMetricLabel(underline_top_y,
                         QString("underline (%1/%2)")
                             .arg(m_deco_metrics.underline_pos)
                             .arg(m_deco_metrics.underline_thick),
-                        ul_clr, false);
+                        ul_clr, false, isGuideVisible(GlyphGuideId::Underline),
+                        ul_alpha);
     }
 
     // Vertical metrics (Origin, Advance, LSB, RSB)
     auto drawVerticalLabel = [&](qreal x, const QString &text, QColor color,
-                                 bool isBottom, bool isLeftOfLine) {
+                                 bool isBottom, bool isLeftOfLine,
+                                 bool record_logical, qreal alpha) {
+        if (!record_logical && alpha <= 0.005) {
+            return;
+        }
         const qreal h = qCeil(label_fm.height()) + step_pad;
         if (safe_bounds.width() <= safe_inset || safe_bounds.height() < h) {
             return;
@@ -1200,29 +1479,38 @@ void GlyphPreviewWidget::paintEvent(QPaintEvent *event)
             QRectF(label_x, label_y, w, h), safe_bounds,
             isBottom ? -(h + step_pad) : (h + step_pad), occupied_labels);
 
-        occupied_labels.append(r);
-        m_last_label_rects.append(r);
-        m_last_label_texts.append(text);
-        painter.setPen(color);
-        painter.drawText(
-            r,
-            (r.center().x() < x ? Qt::AlignRight : Qt::AlignLeft)
-                | Qt::AlignVCenter,
-            elided);
+        if (record_logical) {
+            occupied_labels.append(r);
+            m_last_label_rects.append(r);
+            m_last_label_texts.append(text);
+        }
+        if (alpha > 0.005) {
+            painter.setPen(scaleAlpha(color, alpha));
+            painter.drawText(
+                r,
+                (r.center().x() < x ? Qt::AlignRight : Qt::AlignLeft)
+                    | Qt::AlignVCenter,
+                elided);
+        }
     };
 
-    if (isGuideVisible(GlyphGuideId::Advance)) {
-        drawVerticalLabel(text_x, "origin", adv_clr, true, true);
+    if (isGuideVisible(GlyphGuideId::Advance) || adv_alpha > 0.005) {
+        const bool adv_vis = isGuideVisible(GlyphGuideId::Advance);
+        drawVerticalLabel(text_x, "origin", adv_clr, true, true, adv_vis,
+                          adv_alpha);
         drawVerticalLabel(text_x + display_advance, "advance", adv_clr, true,
-                          false);
+                          false, adv_vis, adv_alpha);
     }
 
-    if (isGuideVisible(GlyphGuideId::Bearings)) {
+    if (isGuideVisible(GlyphGuideId::Bearings) || sb_alpha > 0.005) {
+        const bool sb_vis = isGuideVisible(GlyphGuideId::Bearings);
         if (qAbs(glyph_box.left() - text_x) > 0.1) {
-            drawVerticalLabel(glyph_box.left(), "LSB", sb_clr, false, true);
+            drawVerticalLabel(glyph_box.left(), "LSB", sb_clr, false, true,
+                              sb_vis, sb_alpha);
         }
         if (qAbs(glyph_box.right() - (text_x + display_advance)) > 0.1) {
-            drawVerticalLabel(glyph_box.right(), "RSB", sb_clr, false, false);
+            drawVerticalLabel(glyph_box.right(), "RSB", sb_clr, false, false,
+                              sb_vis, sb_alpha);
         }
     }
     painter.restore();
@@ -1241,11 +1529,30 @@ void GlyphInspectorWidget::setDpr(qreal dpr)
         return;
     }
     m_dpr = clamped;
+    syncMetricsAndFonts();
+}
+
+void GlyphInspectorWidget::syncEmptyLabelFont()
+{
+    if (!m_label_no_selection) {
+        return;
+    }
+    QFont font = fontui::scaledCaptionFont(m_label_no_selection, m_dpr, 5.0,
+                                           14.0, 1.45);
+    font.setItalic(true);
+    if (m_label_no_selection->font() != font) {
+        m_label_no_selection->setFont(font);
+    }
+}
+
+void GlyphInspectorWidget::syncMetricsAndFonts()
+{
     if (m_main_layout) {
         const int pad = fontui::dp(10, m_dpr);
         m_main_layout->setContentsMargins(pad, pad, pad, pad);
         m_main_layout->setSpacing(pad);
     }
+    syncEmptyLabelFont();
     if (m_preview_widget) {
         m_preview_widget->setDpr(m_dpr);
     }
@@ -1254,11 +1561,15 @@ void GlyphInspectorWidget::setDpr(qreal dpr)
     }
     for (QPushButton *pill : m_guide_pills) {
         if (pill) {
-            static_cast<GuidePillButton *>(pill)->setDpr(m_dpr);
+            auto *btn = static_cast<GuidePillButton *>(pill);
+            btn->setDpr(m_dpr);
+            btn->syncFont();
         }
     }
     if (m_btn_outline) {
-        static_cast<GuidePillButton *>(m_btn_outline)->setDpr(m_dpr);
+        auto *btn = static_cast<GuidePillButton *>(m_btn_outline);
+        btn->setDpr(m_dpr);
+        btn->syncFont();
     }
     if (m_btn_toggle_all) {
         static_cast<fontui::CompactActionButton *>(m_btn_toggle_all)
@@ -1289,10 +1600,7 @@ void GlyphInspectorWidget::createUI()
         = new QLabel("Select a character from the Characters tab", this);
     m_label_no_selection->setAlignment(Qt::AlignCenter);
     m_label_no_selection->setWordWrap(true);
-    QFont font = m_label_no_selection->font();
-    font.setPointSize(14);
-    font.setItalic(true);
-    m_label_no_selection->setFont(font);
+    syncEmptyLabelFont();
     applyEmptyLabelPalette();
     m_main_layout->addWidget(m_label_no_selection, 1);
 
@@ -1315,16 +1623,19 @@ void GlyphInspectorWidget::createUI()
     m_group_glyph = new QGroupBox("Glyph Metrics", this);
     auto glyph_layout = new QFormLayout(m_group_glyph);
     glyph_layout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    m_label_glyph_id      = new ElidingValueLabel(this);
     m_label_advance_width = new QLabel(this);
     m_label_bbox          = new QLabel(this);
     m_label_bearings      = new QLabel(this);
     m_label_contours      = new QLabel(this);
     m_label_points        = new QLabel(this);
+    m_label_glyph_id->setObjectName(QStringLiteral("gi_glyph_id_label"));
     configureValueLabel(m_label_advance_width);
     configureValueLabel(m_label_bbox);
     configureValueLabel(m_label_bearings);
     configureValueLabel(m_label_contours);
     configureValueLabel(m_label_points);
+    glyph_layout->addRow("Glyph ID:", m_label_glyph_id);
     glyph_layout->addRow("Advance Width:", m_label_advance_width);
     glyph_layout->addRow("Bounding Box:", m_label_bbox);
     glyph_layout->addRow("Bearings:", m_label_bearings);
@@ -1379,7 +1690,7 @@ void GlyphInspectorWidget::createUI()
                 m_hidden_guides.insert(id);
             }
             if (m_preview_widget) {
-                m_preview_widget->setGuideVisible(id, on);
+                m_preview_widget->setGuideVisible(id, on, true);
             }
             updateToggleAllButton(computeGuideAvailability());
         });
@@ -1401,7 +1712,7 @@ void GlyphInspectorWidget::createUI()
         }
         m_show_outline_points = on;
         if (m_preview_widget) {
-            m_preview_widget->setShowOutlinePoints(on);
+            m_preview_widget->setShowOutlinePoints(on, true);
         }
     });
     flow->addWidget(m_btn_outline);
@@ -1424,7 +1735,7 @@ void GlyphInspectorWidget::createUI()
                 m_hidden_guides.insert(id);
             }
         }
-        syncGuideControls();
+        syncGuideControls(true);
     });
 
     m_guide_bar
@@ -1433,12 +1744,12 @@ void GlyphInspectorWidget::createUI()
 
     m_preview_widget = new GlyphPreviewWidget(this);
     m_preview_widget->setDpr(m_dpr);
-    m_preview_widget->setShowOutlinePoints(m_show_outline_points);
-    m_preview_widget->setHiddenGuides(m_hidden_guides);
+    m_preview_widget->setShowOutlinePoints(m_show_outline_points, false);
+    m_preview_widget->setHiddenGuides(m_hidden_guides, false);
     preview_layout->addWidget(m_preview_widget, 1);
     m_main_layout->addWidget(m_group_preview, 1);
 
-    syncGuideControls();
+    syncGuideControls(false);
 
     // Initially hide all groups
     m_group_unicode->hide();
@@ -1455,7 +1766,7 @@ void GlyphInspectorWidget::setShowOutlinePoints(bool on)
         m_btn_outline->setChecked(on);
     }
     if (m_preview_widget) {
-        m_preview_widget->setShowOutlinePoints(on);
+        m_preview_widget->setShowOutlinePoints(on, isVisible());
     }
 }
 
@@ -1511,11 +1822,12 @@ GlyphInspectorWidget::computeGuideAvailability() const
     const QFont display_font = makeDisplayFontForMetrics(m_font);
     const QFontMetricsF display_fm(display_font, this);
     qreal display_ascent = display_fm.ascent();
-    if (m_has_selection) {
+    if (m_has_selection && m_code_point != 0) {
         const QRawFont display_raw = QRawFont::fromFont(display_font);
         if (display_raw.isValid()) {
             const QVector<quint32> indexes
-                = display_raw.glyphIndexesForString(QString(m_char));
+                = display_raw.glyphIndexesForString(
+                    QString::fromUcs4(&m_code_point, 1));
             if (!indexes.isEmpty()) {
                 display_ascent = display_raw.ascent();
             }
@@ -1557,7 +1869,7 @@ void GlyphInspectorWidget::updateToggleAllButton(
     }
 }
 
-void GlyphInspectorWidget::syncGuideControls()
+void GlyphInspectorWidget::syncGuideControls(bool animate)
 {
     const auto availability = computeGuideAvailability();
     const int count = qMin(m_guide_pills.size(), int(kGuideSpecs.size()));
@@ -1595,7 +1907,7 @@ void GlyphInspectorWidget::syncGuideControls()
     }
     updateToggleAllButton(availability);
     if (m_preview_widget) {
-        m_preview_widget->setHiddenGuides(m_hidden_guides);
+        m_preview_widget->setHiddenGuides(m_hidden_guides, animate);
     }
     if (m_guide_bar) {
         auto *bar = static_cast<GuideControlsBar *>(m_guide_bar);
@@ -1606,18 +1918,20 @@ void GlyphInspectorWidget::syncGuideControls()
     }
 }
 
-void GlyphInspectorWidget::updateGlyph(QChar ch,
+void GlyphInspectorWidget::updateGlyph(quint32 code_point,
                                        const QFont &font,
                                        const QString &font_path,
                                        const FontDecorationMetrics &deco,
-                                       const GlyphOutlineData &outline)
+                                       const GlyphOutlineData &outline,
+                                       const QString &glyph_name)
 {
-    m_char          = ch;
+    m_code_point    = code_point;
     m_font          = font;
     m_font_path     = font_path;
+    m_glyph_name    = glyph_name;
     m_deco_metrics  = deco;
     m_outline       = outline;
-    m_has_selection = !ch.isNull();
+    m_has_selection = (code_point != 0);
 
     if (m_has_selection) {
         m_label_no_selection->hide();
@@ -1628,8 +1942,9 @@ void GlyphInspectorWidget::updateGlyph(QChar ch,
 
         updateMetrics();
         updateLabels();
-        syncGuideControls();
-        m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box,
+        syncGuideControls(false);
+        m_preview_widget->setGlyphData(m_code_point, m_font,
+                                       m_metrics.bounding_box,
                                        m_metrics.advance_width, m_deco_metrics,
                                        m_outline);
     }
@@ -1641,13 +1956,18 @@ void GlyphInspectorWidget::updateGlyph(QChar ch,
 void GlyphInspectorWidget::clearSelection()
 {
     m_has_selection = false;
-    m_char          = QChar();
+    m_code_point    = 0;
+    m_glyph_name.clear();
     m_outline       = {};
     m_label_no_selection->show();
     m_group_unicode->hide();
     m_group_glyph->hide();
     m_group_font->hide();
     m_group_preview->hide();
+    if (m_label_glyph_id) {
+        static_cast<ElidingValueLabel *>(m_label_glyph_id)
+            ->setFullText(QString());
+    }
     m_preview_widget->clear();
 }
 
@@ -1661,22 +1981,27 @@ QPixmap GlyphInspectorWidget::getPreviewPixmap() const
 
 void GlyphInspectorWidget::updateFont(const QFont &font,
                                       const FontDecorationMetrics &deco,
-                                      const GlyphOutlineData &outline)
+                                      const GlyphOutlineData &outline,
+                                      const QString &glyph_name)
 {
     m_deco_metrics = deco;
     m_outline      = outline;
+    if (!glyph_name.isNull()) {
+        m_glyph_name = glyph_name;
+    }
     if (m_has_selection) {
         m_font = font;
         updateMetrics();
         updateLabels();
-        syncGuideControls();
-        m_preview_widget->setGlyphData(m_char, m_font, m_metrics.bounding_box,
+        syncGuideControls(false);
+        m_preview_widget->setGlyphData(m_code_point, m_font,
+                                       m_metrics.bounding_box,
                                        m_metrics.advance_width, m_deco_metrics,
                                        m_outline);
     }
     else {
         m_font = font;
-        syncGuideControls();
+        syncGuideControls(false);
     }
 }
 
@@ -1715,8 +2040,14 @@ void GlyphInspectorWidget::refreshThemeVisuals()
 void GlyphInspectorWidget::changeEvent(QEvent *event)
 {
     QWidget::changeEvent(event);
-    if (event->type() == QEvent::PaletteChange
-        || event->type() == QEvent::ApplicationPaletteChange) {
+    if (event->type() == QEvent::StyleChange
+        || event->type() == QEvent::FontChange) {
+        syncMetricsAndFonts();
+        updateToggleAllButton(computeGuideAvailability());
+        refreshThemeVisuals();
+    }
+    else if (event->type() == QEvent::PaletteChange
+             || event->type() == QEvent::ApplicationPaletteChange) {
         refreshThemeVisuals();
     }
 }
@@ -1729,26 +2060,25 @@ void GlyphInspectorWidget::updateTheme(int theme)
 
 void GlyphInspectorWidget::updateMetrics()
 {
+    const QString str = QString::fromUcs4(&m_code_point, 1);
     // Try QRawFont first for accurate metrics
     QRawFont raw_font = QRawFont::fromFont(m_font);
     if (!raw_font.isValid()) {
         qprintt << "QRawFont invalid, falling back to QFontMetrics";
         QFontMetricsF fm(m_font);
-        m_metrics.advance_width = fm.horizontalAdvance(m_char);
-        m_metrics.bounding_box  = fm.boundingRect(m_char);
+        m_metrics               = {};
+        m_metrics.advance_width = fm.horizontalAdvance(str);
+        m_metrics.bounding_box  = fm.boundingRect(str);
         m_metrics.ascent        = fm.ascent();
         m_metrics.descent       = fm.descent();
         m_metrics.line_gap      = fm.lineSpacing() - fm.height();
-        m_metrics.units_per_em  = 0;
-        m_metrics.left_bearing  = 0;
-        m_metrics.right_bearing = 0;
         return;
     }
 
-    QString str(m_char);
     QVector<quint32> glyph_indexes = raw_font.glyphIndexesForString(str);
     if (glyph_indexes.isEmpty()) {
-        qprintt << "No glyph index for character" << m_char;
+        qprintt << "No glyph index for character"
+                << unicode_blocks::formatCodePoint(m_code_point);
         m_metrics = {};
         return;
     }
@@ -1756,6 +2086,7 @@ void GlyphInspectorWidget::updateMetrics()
     quint32 glyph_index       = glyph_indexes[0];
     QVector<QPointF> advances = raw_font.advancesForGlyphIndexes({glyph_index});
 
+    m_metrics.glyph_id      = glyph_index;
     m_metrics.advance_width = advances.isEmpty() ? 0 : advances[0].x();
     m_metrics.bounding_box  = raw_font.boundingRect(glyph_index);
     m_metrics.ascent        = raw_font.ascent();
@@ -1771,15 +2102,30 @@ void GlyphInspectorWidget::updateMetrics()
 void GlyphInspectorWidget::updateLabels()
 {
     // Unicode info
-    ushort code_point = m_char.unicode();
     m_label_unicode_value->setText(
-        QString("U+%1").arg(code_point, 4, 16, QChar('0')).toUpper());
-    m_label_unicode_decimal->setText(QString::number(code_point));
-    const QString block_name = getUnicodeBlockName(code_point);
+        unicode_blocks::formatCodePoint(m_code_point));
+    m_label_unicode_decimal->setText(QString::number(m_code_point));
+    const QString block_name = unicode_blocks::blockName(m_code_point);
     m_label_unicode_block->setText(block_name);
     m_label_unicode_block->setToolTip(block_name);
 
     // Glyph metrics
+    if (m_label_glyph_id) {
+        QString full_id;
+        if (m_metrics.glyph_id > 0) {
+            full_id = m_glyph_name.isEmpty()
+                ? QStringLiteral("#%1").arg(m_metrics.glyph_id)
+                : QStringLiteral("#%1 (%2)")
+                      .arg(m_metrics.glyph_id)
+                      .arg(m_glyph_name);
+        }
+        else {
+            full_id = m_glyph_name.isEmpty() ? QStringLiteral("N/A")
+                                             : m_glyph_name;
+        }
+        static_cast<ElidingValueLabel *>(m_label_glyph_id)
+            ->setFullText(full_id);
+    }
     m_label_advance_width->setText(
         QString("%1 px").arg(m_metrics.advance_width, 0, 'f', 2));
     m_label_bbox->setText(QString("(%1, %2, %3, %4)")
@@ -1817,89 +2163,4 @@ void GlyphInspectorWidget::updateLabels()
                   .arg(m_deco_metrics.strikeout_pos)
                   .arg(m_deco_metrics.strikeout_size)
             : QStringLiteral("N/A"));
-}
-
-QString GlyphInspectorWidget::getUnicodeBlockName(ushort code_point)
-{
-    // Basic Unicode block detection
-    if (code_point <= 0x007F)
-        return "Basic Latin";
-    if (code_point <= 0x00FF)
-        return "Latin-1 Supplement";
-    if (code_point <= 0x017F)
-        return "Latin Extended-A";
-    if (code_point <= 0x024F)
-        return "Latin Extended-B";
-    if (code_point <= 0x02AF)
-        return "IPA Extensions";
-    if (code_point <= 0x036F)
-        return "Combining Diacritical Marks";
-    if (code_point <= 0x03FF)
-        return "Greek and Coptic";
-    if (code_point <= 0x04FF)
-        return "Cyrillic";
-    if (code_point <= 0x052F)
-        return "Cyrillic Supplement";
-    if (code_point <= 0x058F)
-        return "Armenian";
-    if (code_point <= 0x05FF)
-        return "Hebrew";
-    if (code_point <= 0x06FF)
-        return "Arabic";
-    if (code_point <= 0x09FF)
-        return "Devanagari / Bengali / Gurmukhi / Gujarati / Oriya / Tamil / "
-               "Telugu / Kannada / Malayalam";
-    if (code_point <= 0x0FFF)
-        return "Thai / Lao / Tibetan / Myanmar";
-    if (code_point <= 0x109F)
-        return "Georgian / Hangul Jamo";
-    if (code_point <= 0x11FF)
-        return "Ethiopic / Cherokee";
-    if (code_point <= 0x1FFF)
-        return "Unified Canadian Aboriginal Syllabics / Ogham / Runic / "
-               "Tagalog / Hanunoo / Buhid / Tagbanwa / Khmer / Mongolian";
-    if (code_point <= 0x20CF)
-        return "General Punctuation / Superscripts and Subscripts / Currency "
-               "Symbols";
-    if (code_point <= 0x214F)
-        return "Letterlike Symbols / Number Forms";
-    if (code_point <= 0x218F)
-        return "Arrows";
-    if (code_point <= 0x24FF)
-        return "Mathematical Operators / Miscellaneous Technical / Control "
-               "Pictures / OCR / Enclosed Alphanumerics / Box Drawing / Block "
-               "Elements / Geometric Shapes / Miscellaneous Symbols";
-    if (code_point <= 0x27BF)
-        return "Dingbats / Miscellaneous Mathematical Symbols-A / Supplemental "
-               "Arrows-A";
-    if (code_point <= 0x2FFF)
-        return "Braille Patterns / Supplemental Arrows-B / Miscellaneous "
-               "Mathematical Symbols-B / Supplemental Mathematical Operators / "
-               "Miscellaneous Symbols and Arrows";
-    if (code_point <= 0x4DBF)
-        return "CJK Radicals Supplement / Kangxi Radicals / Ideographic "
-               "Description Characters / CJK Symbols and Punctuation / "
-               "Hiragana / Katakana / Bopomofo / Hangul Compatibility Jamo / "
-               "Kanbun / Bopomofo Extended / CJK Strokes / Katakana Phonetic "
-               "Extensions / Enclosed CJK Letters and Months / CJK "
-               "Compatibility / CJK Unified Ideographs Extension A";
-    if (code_point <= 0x9FFF)
-        return "CJK Unified Ideographs";
-    if (code_point <= 0xD7FF)
-        return "Hangul Syllables";
-    if (code_point <= 0xF8FF)
-        return "Private Use Area";
-    if (code_point <= 0xFAFF)
-        return "CJK Compatibility Ideographs";
-    if (code_point <= 0xFB4F)
-        return "Alphabetic Presentation Forms";
-    if (code_point <= 0xFDFF)
-        return "Arabic Presentation Forms-A";
-    if (code_point <= 0xFE6F)
-        return "Combining Half Marks / CJK Compatibility Forms / Small Form "
-               "Variants";
-    if (code_point <= 0xFEFF)
-        return "Arabic Presentation Forms-B / Halfwidth and Fullwidth Forms / "
-               "Specials";
-    return "Unknown Block";
 }

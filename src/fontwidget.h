@@ -11,6 +11,7 @@
 #include "fontshortcuts.h"
 
 class CharacterWidget;
+class CharactersTab;
 class GlyphInspectorWidget;
 class SamplePreviewTab;
 class TextPreviewTab;
@@ -72,6 +73,8 @@ public:
     bool isInvertPreview() const;
     void setShowOutlinePoints(bool on);
     bool isShowOutlinePoints() const;
+    void setCharCellSizeDp(int cell_dp);
+    int charCellSizeDp() const;
     QStringList hiddenGuideIds() const;
     void setHiddenGuideIds(const QStringList &ids);
     void setFeatureEnabled(const QByteArray &tag, bool enabled);
@@ -90,6 +93,7 @@ public:
     Q_SIGNAL void sigToast(const QString &msg);
     Q_SIGNAL void sigCollapsedChanged(bool c);
     Q_SIGNAL void sigFontSizeChanged(int pt);
+    Q_SIGNAL void sigCharCellSizeChanged(int cell_dp);
 
 protected:
     void changeEvent(QEvent *event) override;
@@ -107,6 +111,7 @@ private:
     void initGlyphTab();
     void initActions();
     void applyShortcuts();
+    void syncCharacterCodePoints();
     void updateResetFeatureActionState();
     QString tooltipWithShortcut(const QString &base,
                                   FontShortcutAction action) const;
@@ -128,6 +133,13 @@ private:
 
     QFont buildPreviewFont(int pt_size, PreviewFontRole role) const;
 
+    struct GlyphInspectData {
+        FontDecorationMetrics deco;
+        GlyphOutlineData outline;
+        QString glyph_name;
+    };
+    GlyphInspectData inspectGlyphData(quint32 cp);
+
     FontInspectorEngine m_inspector;
     int m_face_index = 0;
 
@@ -140,6 +152,7 @@ private:
 
     TextPreviewTab *m_tab_text     = nullptr;
     SamplePreviewTab *m_tab_sample = nullptr;
+    CharactersTab *m_chars_tab     = nullptr;
     CharacterWidget *m_wnd_char    = nullptr;
     QWidget *m_tab_char            = nullptr;
     GlyphInspectorWidget *m_wnd_gi = nullptr;

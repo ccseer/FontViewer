@@ -188,6 +188,21 @@ QHash<quint16, QString> collectSfntNames(
     return result;
 }
 
+QString readGlyphName(FT_Face face, FT_UInt gid)
+{
+    if (!face || gid == 0 || !FT_HAS_GLYPH_NAMES(face)) {
+        return {};
+    }
+    char buf[512]{};
+    if (FT_Get_Glyph_Name(face, gid, buf, sizeof(buf)) != 0) {
+        return {};
+    }
+    buf[sizeof(buf) - 1] = '\0';
+    const QString gname  = QString::fromLatin1(buf).trimmed();
+    return (gname.isEmpty() || gname == QLatin1String(".notdef")) ? QString()
+                                                                 : gname;
+}
+
 FontDecorationMetrics readDecorationMetricsFromFace(FT_Face face)
 {
     FontDecorationMetrics metrics;
@@ -770,6 +785,9 @@ void FontInspectorEngine::populateFace(FaceEntry &entry)
     if (!face) {
         return;
     }
+    if (!face->charmap || face->charmap->encoding != FT_ENCODING_UNICODE) {
+        FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+    }
 
     QHash<quint16, QStringList> name_aliases;
     const QHash<quint16, QString> names = collectSfntNames(face, &name_aliases);
@@ -1078,10 +1096,129 @@ FontDecorationMetrics FontInspectorEngine::decorationMetrics(
     return readDecorationMetricsFromFace(face);
 }
 
-GlyphOutlineData FontInspectorEngine::glyphOutline(
-    int face_index, QChar ch, const QHash<QByteArray, float> &axis_coords)
+const QVector<quint32> &FontInspectorEngine::faceCodePoints(int face_index)
 {
-    if (face_index < 0 || face_index >= m_faces.size() || ch.isNull()) {
+    static const QVector<quint32> kEmpty;
+    if (face_index < 0 || face_index >= m_faces.size()) {
+        return kEmpty;
+    }
+    FaceEntry &entry = m_faces[face_index];
+    if (entry.code_points_loaded) {
+        return entry.code_points;
+    }
+    entry.code_points_loaded = true;
+    FT_Face face             = entry.face;
+    if (!face) {
+        return entry.code_points;
+    }
+
+    // Prefer Unicode charmap across all planes; fall back to whatever charmap
+    // FreeType activated (e.g. legacy MS Symbol fonts) if absent.
+    if (!face->charmap || face->charmap->encoding != FT_ENCODING_UNICODE) {
+        FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+    }
+
+    struct CpGlyph {
+        quint32 cp  = 0;
+        quint32 gid = 0;
+    };
+    QVector<CpGlyph> items;
+    FT_UInt gindex    = 0;
+    FT_ULong charcode = FT_Get_First_Char(face, &gindex);
+    while (gindex != 0) {
+        if (charcode > 0x10FFFFul) {
+            break;
+        }
+        if (charcode > 0 && !(charcode >= 0xD800ul && charcode <= 0xDFFFul)) {
+            items.append({quint32(charcode), quint32(gindex)});
+        }
+        const FT_ULong prev_char = charcode;
+        charcode                 = FT_Get_Next_Char(face, charcode, &gindex);
+        if (gindex != 0 && charcode <= prev_char) {
+            break;
+        }
+    }
+    std::sort(items.begin(), items.end(),
+              [](const CpGlyph &a, const CpGlyph &b) { return a.cp < b.cp; });
+    items.erase(std::unique(items.begin(), items.end(),
+                            [](const CpGlyph &a, const CpGlyph &b) {
+                                return a.cp == b.cp;
+                            }),
+                items.end());
+    entry.code_points.reserve(items.size());
+    entry.glyph_ids.reserve(items.size());
+    for (const CpGlyph &item : items) {
+        entry.code_points.append(item.cp);
+        entry.glyph_ids.append(item.gid);
+    }
+    return entry.code_points;
+}
+
+const QVector<quint32> &FontInspectorEngine::faceCodePointGlyphIds(int face_index)
+{
+    static const QVector<quint32> kEmpty;
+    if (face_index < 0 || face_index >= m_faces.size()) {
+        return kEmpty;
+    }
+    faceCodePoints(face_index);
+    return m_faces[face_index].glyph_ids;
+}
+
+const QVector<QString> &FontInspectorEngine::faceGlyphNames(int face_index)
+{
+    static const QVector<QString> kEmpty;
+    if (face_index < 0 || face_index >= m_faces.size()) {
+        return kEmpty;
+    }
+    faceCodePoints(face_index);
+    FaceEntry &entry = m_faces[face_index];
+    if (entry.glyph_names_loaded) {
+        return entry.glyph_names;
+    }
+    entry.glyph_names_loaded = true;
+    FT_Face face             = entry.face;
+    if (!face || !FT_HAS_GLYPH_NAMES(face) || entry.glyph_ids.isEmpty()) {
+        return entry.glyph_names;
+    }
+
+    entry.glyph_names.resize(entry.glyph_ids.size());
+    for (int i = 0; i < entry.glyph_ids.size(); ++i) {
+        entry.glyph_names[i]
+            = readGlyphName(face, FT_UInt(entry.glyph_ids.at(i)));
+    }
+    return entry.glyph_names;
+}
+
+GlyphIdentity FontInspectorEngine::glyphIdentity(int face_index,
+                                                 quint32 code_point) const
+{
+    GlyphIdentity id;
+    if (face_index < 0 || face_index >= m_faces.size() || code_point == 0
+        || code_point > 0x10FFFFu
+        || (code_point >= 0xD800u && code_point <= 0xDFFFu)) {
+        return id;
+    }
+    FT_Face face = m_faces[face_index].face;
+    if (!face) {
+        return id;
+    }
+    const FT_UInt gid = FT_Get_Char_Index(face, FT_ULong(code_point));
+    if (gid == 0) {
+        return id;
+    }
+    id.glyph_index = quint32(gid);
+    id.glyph_name  = readGlyphName(face, gid);
+    return id;
+}
+
+GlyphOutlineData FontInspectorEngine::glyphOutline(
+    int face_index,
+    quint32 code_point,
+    const QHash<QByteArray, float> &axis_coords)
+{
+    if (face_index < 0 || face_index >= m_faces.size() || code_point == 0
+        || code_point > 0x10FFFFu
+        || (code_point >= 0xD800u && code_point <= 0xDFFFu)) {
         return {};
     }
     FaceEntry &entry = m_faces[face_index];
@@ -1091,7 +1228,7 @@ GlyphOutlineData FontInspectorEngine::glyphOutline(
     }
 
     const FT_UInt glyph_index
-        = FT_Get_Char_Index(face, FT_ULong(ch.unicode()));
+        = FT_Get_Char_Index(face, FT_ULong(code_point));
     if (glyph_index == 0) {
         return {};
     }
@@ -1157,19 +1294,35 @@ QString FontInspectorEngine::probeSampleForFace(int face_index) const
     }
 
     QString sample;
+    QString pua_fallback;
+    int sample_cps    = 0;
+    int pua_cps       = 0;
     FT_UInt gindex    = 0;
     FT_ULong charcode = FT_Get_First_Char(face, &gindex);
-    while (gindex != 0 && sample.size() < 4) {
-        if (charcode >= 0x21 && charcode <= 0xFFFF
-            && !(charcode >= 0xD800 && charcode <= 0xDFFF)) {
-            const QChar ch{char16_t(charcode)};
-            if (!ch.isSpace() && ch.isPrint()) {
-                sample.append(ch);
+    while (gindex != 0 && sample_cps < 4) {
+        if (charcode > 0x10FFFFul) {
+            break;
+        }
+        if (charcode >= 0x21
+            && !(charcode >= 0xD800ul && charcode <= 0xDFFFul)) {
+            const char32_t cp = char32_t(charcode);
+            if (!QChar::isSpace(cp) && QChar::isPrint(cp)) {
+                sample.append(QString::fromUcs4(&cp, 1));
+                ++sample_cps;
+            }
+            else if (pua_cps < 4
+                     && QChar::category(cp) == QChar::Other_PrivateUse) {
+                pua_fallback.append(QString::fromUcs4(&cp, 1));
+                ++pua_cps;
             }
         }
-        charcode = FT_Get_Next_Char(face, charcode, &gindex);
+        const FT_ULong prev_char = charcode;
+        charcode                 = FT_Get_Next_Char(face, charcode, &gindex);
+        if (gindex != 0 && charcode <= prev_char) {
+            break;
+        }
     }
-    return sample;
+    return !sample.isEmpty() ? sample : pua_fallback;
 }
 
 QVector<FontNameRecord> FontInspectorEngine::readNameRecords(

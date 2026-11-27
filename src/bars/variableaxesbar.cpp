@@ -454,6 +454,15 @@ void VariableAxesBar::probeBackend(const FontInspectorEngine &engine,
     m_warning->setVisible(m_gdi_inactive);
 }
 
+void VariableAxesBar::changeEvent(QEvent *event)
+{
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::FontChange
+        || event->type() == QEvent::StyleChange) {
+        updateLayoutMetrics();
+    }
+}
+
 bool VariableAxesBar::eventFilter(QObject *watched, QEvent *event)
 {
     if (event->type() == QEvent::Wheel) {

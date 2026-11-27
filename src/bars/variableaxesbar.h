@@ -40,6 +40,7 @@ public:
     Q_SIGNAL void sigInteractionClearFocus();
 
 protected:
+    void changeEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:

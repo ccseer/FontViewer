@@ -1,110 +1,120 @@
-/****************************************************************************
-**
-** Copyright (C) 2016 The Qt Company Ltd.
-** Contact: https://www.qt.io/licensing/
-**
-** This file is part of the examples of the Qt Toolkit.
-**
-** $QT_BEGIN_LICENSE:BSD$
-** Commercial License Usage
-** Licensees holding valid commercial Qt licenses may use this file in
-** accordance with the commercial license agreement provided with the
-** Software or, alternatively, in accordance with the terms contained in
-** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see https://www.qt.io/terms-conditions. For further
-** information use the contact form at https://www.qt.io/contact-us.
-**
-** BSD License Usage
-** Alternatively, you may use this file under the terms of the BSD license
-** as follows:
-**
-** "Redistribution and use in source and binary forms, with or without
-** modification, are permitted provided that the following conditions are
-** met:
-**   * Redistributions of source code must retain the above copyright
-**     notice, this list of conditions and the following disclaimer.
-**   * Redistributions in binary form must reproduce the above copyright
-**     notice, this list of conditions and the following disclaimer in
-**     the documentation and/or other materials provided with the
-**     distribution.
-**   * Neither the name of The Qt Company Ltd nor the names of its
-**     contributors may be used to endorse or promote products derived
-**     from this software without specific prior written permission.
-**
-**
-** THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-** "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-** LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-** A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-** OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-** SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-** LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-** DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-** THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-** (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-** OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE."
-**
-** $QT_END_LICENSE$
-**
-****************************************************************************/
+#pragma once
 
-#ifndef CHARACTERWIDGET_H
-#define CHARACTERWIDGET_H
-
+#include <QFont>
+#include <QPixmap>
+#include <QString>
+#include <QVector>
 #include <QWidget>
+#include <QtGlobal>
 
-QT_BEGIN_NAMESPACE
+class QEvent;
 class QMouseEvent;
 class QPaintEvent;
-QT_END_NAMESPACE
+class QResizeEvent;
 
 class CharacterWidget : public QWidget {
     Q_OBJECT
 
 public:
-    CharacterWidget(QWidget *parent = nullptr);
-    void setDpr(qreal dpr);
-    void init(const QString &path);
-    inline const ushort getCharCount() const
-    {
-        return m_char_indexes.size();
-    }
-    QPixmap getSelectedCharPix();
+    static constexpr int kMinCellSizeDp = 28;
+    static constexpr int kMaxCellSizeDp = 80;
+    static constexpr int kDefCellSizeDp = 44;
 
     struct SelectedCharInfo {
+        quint32 code_point = 0;
         QChar ch;
         QFont font;
         int square_size = 0;
+
+        QString text() const
+        {
+            return (code_point > 0 && code_point <= 0x10FFFFu)
+                       ? QString::fromUcs4(&code_point, 1)
+                       : QString();
+        }
     };
+
+    explicit CharacterWidget(QWidget *parent = nullptr);
+
+    void setDpr(qreal dpr);
+    void setCellSizeDp(int cell_dp);
+    int cellSizeDp() const
+    {
+        return m_cell_dp;
+    }
+    int cellSizePx() const;
+    int columnCount() const;
+    QRect cellRectForIndex(int index) const;
+
+    void init(const QString &path);
+    void setCodePoints(const QVector<quint32> &code_points);
+    void setSelectedCodePoint(quint32 code_point);
+
+    int getCharCount() const
+    {
+        return m_code_points.size();
+    }
+    quint32 selectedCodePoint() const
+    {
+        return m_last_key;
+    }
+    QPixmap getSelectedCharPix();
     SelectedCharInfo selectedCharInfo() const;
     const QFont &currentFont() const
     {
-        return m_ft;
+        return m_glyph_font;
     }
+
+    bool hasHeightForWidth() const override
+    {
+        return true;
+    }
+    int heightForWidth(int width) const override;
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
 public slots:
     void updateFont(const QFont &font);
 
 signals:
+    void selectionChangedCodePoint(quint32 cp);
+    void characterDoubleClickedCodePoint(quint32 cp);
     void selectionChanged(QChar ch);
     void characterDoubleClicked(QChar ch);
+    void interactionClearFocus();
 
 protected:
-    QSize sizeHint() const override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
 private:
-    ushort getCharIndexAtPos(const QPoint &pt);
+    struct GridMetrics {
+        int cell_px  = 0;
+        int cols     = 1;
+        int origin_x = 0;
+        int pad_y    = 0;
+    };
 
-    QVector<ushort> m_char_indexes;
-    QFont m_ft;
-    ushort m_last_key     = 0;
-    int m_sz_square       = 16;
-    qreal m_dpr           = 1.0;
-    const uchar m_columns = 16;
+    GridMetrics computeGridMetrics() const;
+    int indexAtPos(const QPoint &pt) const;
+    int indexOfCodePoint(quint32 cp) const;
+    void updateCell(int index);
+    quint32 codePointAtIndex(int index) const;
+    QRect cellRect(int index, int cols, int cell_px, int origin_x, int pad_y) const;
+    int glyphPixelSize() const;
+    void syncGlyphFont();
+    void updateGridGeometry();
+    void emitSelection(quint32 cp);
+
+    QVector<quint32> m_code_points;
+    QFont m_base_font;
+    QFont m_glyph_font;
+    quint32 m_last_key = 0;
+    int m_hover_index  = -1;
+    int m_cell_dp      = kDefCellSizeDp;
+    qreal m_dpr        = 1.0;
 };
-
-#endif

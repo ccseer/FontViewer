@@ -61,6 +61,11 @@ struct GlyphOutlineData {
     QVector<int> contour_ends;  // inclusive end index per contour
 };
 
+struct GlyphIdentity {
+    quint32 glyph_index = 0;
+    QString glyph_name;
+};
+
 struct FontInspectionData {
     QVector<FontNameRecord> name_records;
     FontDecorationMetrics decoration_metrics;
@@ -96,10 +101,23 @@ public:
         int face_index, const QString &style) const;
     FontDecorationMetrics decorationMetrics(
         int face_index, const QHash<QByteArray, float> &axis_coords = {});
+    const QVector<quint32> &faceCodePoints(int face_index);
+    const QVector<quint32> &faceCodePointGlyphIds(int face_index);
+    const QVector<QString> &faceGlyphNames(int face_index);
+    GlyphIdentity glyphIdentity(int face_index, quint32 code_point) const;
+    GlyphOutlineData glyphOutline(
+        int face_index,
+        quint32 code_point,
+        const QHash<QByteArray, float> &axis_coords = {});
     GlyphOutlineData glyphOutline(
         int face_index,
         QChar ch,
-        const QHash<QByteArray, float> &axis_coords = {});
+        const QHash<QByteArray, float> &axis_coords = {})
+    {
+        return glyphOutline(face_index,
+                            ch.isNull() ? 0u : quint32(ch.unicode()),
+                            axis_coords);
+    }
 
     static QVector<FontNameRecord> readNameRecords(const QString &font_path);
     static QString normalizeStyleName(const QString &name);
@@ -118,6 +136,11 @@ private:
         QVector<QStringList> instance_aliases;
         QVector<long> applied_coords;
         bool has_applied_coords = false;
+        bool code_points_loaded = false;
+        bool glyph_names_loaded = false;
+        QVector<quint32> code_points;
+        QVector<quint32> glyph_ids;
+        QVector<QString> glyph_names;
         FontInspectionData data;
     };
 

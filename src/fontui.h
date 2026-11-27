@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QIcon>
+#include <QLabel>
 #include <QLayout>
 #include <QOperatingSystemVersion>
 #include <QPalette>
@@ -11,6 +12,8 @@
 #include <QtGlobal>
 
 class QComboBox;
+class QEvent;
+class QVBoxLayout;
 
 namespace fontui {
 
@@ -42,6 +45,7 @@ protected:
     {
         return m_dpr;
     }
+    void changeEvent(QEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
 private:
@@ -92,6 +96,68 @@ private:
     int m_h_spacing = 5;
     int m_v_spacing = 4;
 };
+
+// Host-aligned rounded surface card behind preview/grid viewports.
+class SurfaceFrame : public QWidget {
+public:
+    explicit SurfaceFrame(QWidget *parent = nullptr);
+
+    void addContent(QWidget *w);
+    void setDpr(qreal dpr);
+    void setInverted(bool inverted);
+    void setFocused(bool focused);
+    void setWaterfallActive(bool active);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    void updateMetrics();
+
+    QVBoxLayout *m_layout = nullptr;
+    qreal m_dpr           = 1.0;
+    bool m_inverted       = false;
+    bool m_focused        = false;
+    bool m_waterfall      = false;
+};
+
+// Compact pill badge displaying tabular values (height/spacing/cell size).
+class ValueBadge final : public QLabel {
+public:
+    explicit ValueBadge(qreal dpr,
+                        const QString &sample_width_text = QStringLiteral("-20.0"),
+                        QWidget *parent = nullptr);
+
+    void setDpr(qreal dpr);
+    void refreshFont();
+    void setModified(bool modified);
+    bool isModified() const
+    {
+        return m_modified;
+    }
+
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
+protected:
+    void changeEvent(QEvent *event) override;
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    void syncFont();
+    void updateMetrics();
+
+    qreal m_dpr = 1.0;
+    QString m_sample_width_text;
+    bool m_modified     = false;
+    bool m_syncing_font = false;
+};
+
+QFont scaledCaptionFont(const QWidget *widget,
+                        qreal dpr,
+                        qreal delta_pt,
+                        qreal min_pt,
+                        qreal pixel_ratio);
 
 inline qreal clampDpr(qreal dpr)
 {

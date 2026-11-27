@@ -10,14 +10,17 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QSvgGenerator>
 #include <QTabBar>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QtMath>
@@ -26,7 +29,9 @@
 
 #include "bars/opentypefeaturesbar.h"
 #include "bars/variableaxesbar.h"
+#include "engine/unicodeblocks.h"
 #include "fontui.h"
+#include "tabs/characterstab.h"
 #include "tabs/characterwidget.h"
 #include "tabs/glyphinspectorwidget.h"
 #include "tabs/samplepreviewtab.h"
@@ -221,24 +226,42 @@ void FontWidget::initTextTab()
 void FontWidget::initSampleTab()
 {
     m_tab_sample = new SamplePreviewTab(this);
+    m_tab_sample->setDpr(m_dpr);
     ui->tabWidget->addTab(m_tab_sample, tr("Sample"));
 
     connect(m_tab_sample, &SamplePreviewTab::sigZoomRequested, this,
             &FontWidget::zoomSize);
     connect(m_tab_sample, &SamplePreviewTab::sigInteractionClearFocus, this,
             &FontWidget::clearViewerFocus);
+    connect(m_tab_sample, &SamplePreviewTab::sigCopyToastRequested, this,
+            &FontWidget::sigToast);
 }
 
 void FontWidget::initCharTab()
 {
-    auto *wnd_char_sa = new QScrollArea(this);
-    m_wnd_char        = new CharacterWidget(this);
-    wnd_char_sa->setFrameShape(QFrame::NoFrame);
-    wnd_char_sa->setFocusPolicy(Qt::NoFocus);
-    wnd_char_sa->setWidget(m_wnd_char);
-    ui->tabWidget->addTab(wnd_char_sa, "Characters");
-    m_tab_char = wnd_char_sa;
-    m_wnd_char->installEventFilter(this);
+    m_chars_tab = new CharactersTab(this);
+    m_chars_tab->setDpr(m_dpr);
+    m_wnd_char = m_chars_tab->characterWidget();
+    ui->tabWidget->addTab(m_chars_tab, "Characters");
+    m_tab_char = m_chars_tab;
+    if (m_wnd_char) {
+        m_wnd_char->installEventFilter(this);
+    }
+
+    connect(m_chars_tab, &CharactersTab::sigCopyToastRequested, this,
+            &FontWidget::sigToast);
+    connect(m_chars_tab, &CharactersTab::sigCharCellSizeChanged, this,
+            &FontWidget::sigCharCellSizeChanged);
+    connect(m_chars_tab, &CharactersTab::sigInteractionClearFocus, this,
+            &FontWidget::clearViewerFocus);
+    connect(m_chars_tab, &CharactersTab::sigInsertTextRequested, this,
+            [this](const QString &text) {
+                if (m_tab_text && !text.isEmpty()) {
+                    m_tab_text->setCurrentText(m_tab_text->currentText() + text);
+                    ui->tabWidget->setCurrentWidget(m_tab_text);
+                }
+                clearViewerFocus();
+            });
 }
 
 void FontWidget::initGlyphTab()
@@ -252,48 +275,58 @@ void FontWidget::initGlyphTab()
     ui->tabWidget->addTab(wnd_glyph_sa, "Glyph Inspector");
     m_tab_gi = wnd_glyph_sa;
 
-    connect(m_wnd_char, &CharacterWidget::selectionChanged, this,
-            [this](QChar ch) {
-                const int pt                   = getCurrentFontSize();
-                const auto &axis_vals          = m_axes_bar
-                                                     ? m_axes_bar->axisValues()
-                                                     : QHash<QByteArray, float>{};
-                const FontDecorationMetrics deco
-                    = m_inspector.decorationMetrics(m_face_index, axis_vals);
-                const GlyphOutlineData outline
-                    = ch.isNull()
-                          ? GlyphOutlineData{}
-                          : m_inspector.glyphOutline(m_face_index, ch, axis_vals);
-                m_wnd_gi->updateGlyph(
-                    ch, buildPreviewFont(pt, PreviewFontRole::Glyph),
-                    m_font_path, deco, outline);
-                m_gi_dirty = false;
+    if (m_chars_tab) {
+        connect(m_chars_tab, &CharactersTab::selectionChangedCodePoint, this,
+                [this](quint32 cp) {
+                    const int pt             = getCurrentFontSize();
+                    const GlyphInspectData d = inspectGlyphData(cp);
+                    m_wnd_gi->updateGlyph(
+                        cp, buildPreviewFont(pt, PreviewFontRole::Glyph),
+                        m_font_path, d.deco, d.outline, d.glyph_name);
+                    m_gi_dirty = false;
 
-                // Update tab title with character code
-                int tab_index = ui->tabWidget->indexOf(m_tab_gi);
-                if (tab_index != -1) {
-                    if (ch.isNull()) {
-                        ui->tabWidget->setTabText(tab_index, "Glyph Inspector");
+                    const int tab_index = ui->tabWidget->indexOf(m_tab_gi);
+                    if (tab_index != -1) {
+                        if (cp == 0) {
+                            ui->tabWidget->setTabText(tab_index,
+                                                      "Glyph Inspector");
+                        }
+                        else {
+                            ui->tabWidget->setTabText(
+                                tab_index,
+                                QStringLiteral("Glyph Inspector - %1")
+                                    .arg(unicode_blocks::formatCodePoint(cp)));
+                        }
                     }
-                    else {
-                        QString hex = QString("%1")
-                                          .arg(ch.unicode(), 4, 16, QChar('0'))
-                                          .toUpper();
-                        QString title
-                            = QString("Glyph Inspector - U+%1").arg(hex);
-                        ui->tabWidget->setTabText(tab_index, title);
-                    }
-                }
-            });
+                });
 
-    connect(m_wnd_char, &CharacterWidget::characterDoubleClicked, this,
-            [this](QChar ch) {
-                Q_UNUSED(ch);
-                int tab_index = ui->tabWidget->indexOf(m_tab_gi);
-                if (tab_index != -1) {
-                    ui->tabWidget->setCurrentIndex(tab_index);
-                }
-            });
+        connect(m_chars_tab, &CharactersTab::inspectRequested, this,
+                [this, wnd_glyph_sa](quint32 cp, bool scroll_to_preview) {
+                    if (cp != 0 && m_wnd_gi
+                        && m_wnd_gi->currentCodePoint() != cp) {
+                        emit m_chars_tab->selectionChangedCodePoint(cp);
+                    }
+                    const int tab_index = ui->tabWidget->indexOf(m_tab_gi);
+                    if (tab_index != -1) {
+                        ui->tabWidget->setCurrentIndex(tab_index);
+                        if (wnd_glyph_sa) {
+                            QPointer<QScrollArea> sa(wnd_glyph_sa);
+                            QTimer::singleShot(
+                                0, wnd_glyph_sa, [sa, scroll_to_preview]() {
+                                    if (!sa) {
+                                        return;
+                                    }
+                                    if (QScrollBar *vsb
+                                        = sa->verticalScrollBar()) {
+                                        vsb->setValue(scroll_to_preview
+                                                          ? vsb->maximum()
+                                                          : 0);
+                                    }
+                                });
+                        }
+                    }
+                });
+    }
 }
 
 void FontWidget::initAxesBar()
@@ -340,8 +373,8 @@ void FontWidget::updateLayoutMetrics()
     if (m_tab_sample) {
         m_tab_sample->setDpr(m_dpr);
     }
-    if (m_wnd_char) {
-        m_wnd_char->setDpr(m_dpr);
+    if (m_chars_tab) {
+        m_chars_tab->setDpr(m_dpr);
     }
     if (m_wnd_gi) {
         m_wnd_gi->setDpr(m_dpr);
@@ -400,16 +433,15 @@ bool FontWidget::init(const QString &p)
     if (names.isEmpty()) {
         qprintt << "applicationFontFamilies err";
         releaseApplicationFont();
+        m_inspector.close();
         return false;
     }
     initUI(names);
-    // init data after initUI
-    m_wnd_char->init(p);
 
     onNameChanged();
     onTabChanged();
-    if (m_wnd_char && m_char_dirty) {
-        m_wnd_char->updateFont(
+    if (m_chars_tab && m_char_dirty) {
+        m_chars_tab->updateFont(
             buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Glyph));
         m_char_dirty = false;
     }
@@ -574,6 +606,36 @@ void FontWidget::clearPreviewUndoHistory()
     }
 }
 
+void FontWidget::syncCharacterCodePoints()
+{
+    if (!m_chars_tab) {
+        return;
+    }
+    if (m_inspector.isValid()) {
+        const int face = m_face_index;
+        m_chars_tab->setCodePoints(
+            m_inspector.faceCodePoints(face),
+            m_inspector.faceCodePointGlyphIds(face));
+        m_chars_tab->setGlyphNameProvider(
+            [self = QPointer<FontWidget>(this), face]() {
+                if (!self || !self->m_inspector.isValid()) {
+                    return QVector<QString>{};
+                }
+                return self->m_inspector.faceGlyphNames(face);
+            });
+    }
+    else {
+        m_chars_tab->setCodePoints({});
+    }
+    if (m_wnd_gi && m_wnd_gi->hasSelection()) {
+        m_wnd_gi->clearSelection();
+        const int tab_index = ui->tabWidget->indexOf(m_tab_gi);
+        if (tab_index != -1) {
+            ui->tabWidget->setTabText(tab_index, "Glyph Inspector");
+        }
+    }
+}
+
 void FontWidget::syncOpenTypeFeatures()
 {
     if (!m_tab_text) {
@@ -606,6 +668,7 @@ void FontWidget::onNameChanged()
     if (m_axes_bar) {
         m_axes_bar->rebuild(m_inspector, m_face_index, name, true);
     }
+    syncCharacterCodePoints();
     syncOpenTypeFeatures();
     syncTypographyGroupVisibility();
 
@@ -622,6 +685,7 @@ void FontWidget::onStyleChanged()
         if (m_axes_bar) {
             m_axes_bar->rebuild(m_inspector, m_face_index, name, false);
         }
+        syncCharacterCodePoints();
         syncOpenTypeFeatures();
         syncTypographyGroupVisibility();
     }
@@ -703,7 +767,10 @@ void FontWidget::updateInfo()
     const QString name  = ui->comboBox_family->currentText();
     const QString style = ui->comboBox_style->currentText();
 
-    QString text = QString::number(m_wnd_char->getCharCount());
+    const int char_count
+        = m_inspector.isValid() ? m_inspector.faceCodePoints(m_face_index).size()
+                                : (m_wnd_char ? m_wnd_char->getCharCount() : 0);
+    QString text = QString::number(char_count);
     text += " Characters\n";
 
     const auto weight = QFontDatabase::weight(name, style);
@@ -785,8 +852,8 @@ void FontWidget::onTabChanged()
         }
     }
     else if (cur_wnd == m_tab_char && m_char_dirty) {
-        if (m_wnd_char) {
-            m_wnd_char->updateFont(
+        if (m_chars_tab) {
+            m_chars_tab->updateFont(
                 buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Glyph));
         }
         m_char_dirty = false;
@@ -806,22 +873,30 @@ void FontWidget::refreshTextWidgetsFromFont()
     m_tab_text->applyFont(buildPreviewFont(pt, PreviewFontRole::Text), pt);
 }
 
+FontWidget::GlyphInspectData FontWidget::inspectGlyphData(quint32 cp)
+{
+    GlyphInspectData data;
+    const auto &axis_vals = m_axes_bar ? m_axes_bar->axisValues()
+                                       : QHash<QByteArray, float>{};
+    data.deco = m_inspector.decorationMetrics(m_face_index, axis_vals);
+    if (cp != 0) {
+        data.outline = m_inspector.glyphOutline(m_face_index, cp, axis_vals);
+        data.glyph_name
+            = m_inspector.glyphIdentity(m_face_index, cp).glyph_name;
+    }
+    return data;
+}
+
 void FontWidget::updateGlyphInspectorFont(const QFont &glyph_font)
 {
     if (!m_wnd_gi) {
         return;
     }
-    const auto &axis_vals = m_axes_bar ? m_axes_bar->axisValues()
-                                       : QHash<QByteArray, float>{};
-    const FontDecorationMetrics deco
-        = m_inspector.decorationMetrics(m_face_index, axis_vals);
-    const QChar ch                 = m_wnd_gi->hasSelection()
-                                         ? m_wnd_gi->currentChar()
-                                         : QChar();
-    const GlyphOutlineData outline = ch.isNull()
-        ? GlyphOutlineData{}
-        : m_inspector.glyphOutline(m_face_index, ch, axis_vals);
-    m_wnd_gi->updateFont(glyph_font, deco, outline);
+    const quint32 cp = m_wnd_gi->hasSelection()
+                           ? m_wnd_gi->currentCodePoint()
+                           : 0u;
+    const GlyphInspectData d = inspectGlyphData(cp);
+    m_wnd_gi->updateFont(glyph_font, d.deco, d.outline, d.glyph_name);
 }
 
 void FontWidget::refreshGlyphInspectorFromFont()
@@ -854,6 +929,19 @@ void FontWidget::setShowOutlinePoints(bool on)
 bool FontWidget::isShowOutlinePoints() const
 {
     return m_wnd_gi ? m_wnd_gi->isShowOutlinePoints() : false;
+}
+
+void FontWidget::setCharCellSizeDp(int cell_dp)
+{
+    if (m_chars_tab) {
+        m_chars_tab->setCellSizeDp(cell_dp, false);
+    }
+}
+
+int FontWidget::charCellSizeDp() const
+{
+    return m_chars_tab ? m_chars_tab->cellSizeDp()
+                       : CharacterWidget::kDefCellSizeDp;
 }
 
 QStringList FontWidget::hiddenGuideIds() const
@@ -913,8 +1001,8 @@ void FontWidget::refreshActiveTabFromAxes()
         m_sample_dirty = false;
     }
     else if (cur_wnd == m_tab_char) {
-        if (m_wnd_char) {
-            m_wnd_char->updateFont(
+        if (m_chars_tab) {
+            m_chars_tab->updateFont(
                 buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Glyph));
         }
         m_char_dirty = false;
@@ -940,7 +1028,9 @@ void FontWidget::updateTabTextPreview()
     m_text_dirty = false;
 
     if (ui->tabWidget->currentWidget() == m_tab_char) {
-        m_wnd_char->updateFont(glyph_font);
+        if (m_chars_tab) {
+            m_chars_tab->updateFont(glyph_font);
+        }
         m_char_dirty = false;
     }
     else {
@@ -966,7 +1056,9 @@ void FontWidget::updateSamplePreview()
     }
     m_tab_sample->updateSample(
         ui->comboBox_family->currentText(),
-        buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Sample));
+        buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Sample),
+        m_inspector.probeSampleForFace(m_face_index));
+    m_sample_dirty = false;
 }
 
 void FontWidget::copy()
@@ -1047,7 +1139,9 @@ bool FontWidget::eventFilter(QObject *watched, QEvent *event)
                 wheel->accept();
                 return true;
             }
-            zoomSize(wheel->angleDelta().y() > 0 ? 1 : -1);
+            if (m_chars_tab) {
+                m_chars_tab->stepCellSize(wheel->angleDelta().y() > 0 ? 4 : -4);
+            }
             clearViewerFocus();
             wheel->accept();
             return true;
@@ -1060,6 +1154,11 @@ bool FontWidget::eventFilter(QObject *watched, QEvent *event)
 void FontWidget::zoomSize(int steps)
 {
     if (steps == 0) {
+        return;
+    }
+    if (ui && ui->tabWidget && ui->tabWidget->currentWidget() == m_tab_char
+        && m_chars_tab) {
+        m_chars_tab->stepCellSize(steps * 4);
         return;
     }
     const int count = ui->comboBox_sz->count();
@@ -1171,6 +1270,12 @@ void FontWidget::updateTheme(int theme)
     if (m_wnd_gi) {
         m_wnd_gi->updateTheme(theme);
     }
+    if (m_tab_sample) {
+        m_tab_sample->refreshThemeVisuals();
+    }
+    if (m_chars_tab) {
+        m_chars_tab->update();
+    }
     if (m_tab_text) {
         m_tab_text->applyInvertPreview();
         m_tab_text->updateWaterfall();
@@ -1217,18 +1322,19 @@ bool FontWidget::saveAsSvgTo(const QString &path, QString *error_out)
     }
     else if (m_wnd_char) {
         const auto info = m_wnd_char->selectedCharInfo();
-        if (info.ch.isNull()) {
+        if (info.code_point == 0) {
             return fail(QStringLiteral("Please select a character first"));
         }
         const int side = qMax(64, info.square_size * 2);
         sz             = QSize(side, side);
         QFont ft       = info.font;
         ft.setPixelSize(side / 2);
-        draw_fn = [ch = info.ch, ft, side](QPainter &p) {
+        draw_fn = [cp = info.code_point, ft, side](QPainter &p) {
             p.setRenderHints(QPainter::Antialiasing
                              | QPainter::TextAntialiasing);
             p.setFont(ft);
-            p.drawText(QRect(0, 0, side, side), Qt::AlignCenter, QString(ch));
+            p.drawText(QRect(0, 0, side, side), Qt::AlignCenter,
+                       QString::fromUcs4(&cp, 1));
         };
     }
 
@@ -1264,18 +1370,17 @@ void FontWidget::saveAsSvg()
     const bool is_char
         = (cur_tab != m_tab_text && cur_tab != m_tab_sample && !is_gi);
 
-    QChar selected_char;
+    quint32 selected_cp = 0;
     if ((is_gi || is_char) && m_wnd_char) {
-        selected_char = m_wnd_char->selectedCharInfo().ch;
+        selected_cp = m_wnd_char->selectedCharInfo().code_point;
     }
 
     const QString dir
         = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
     const QString family = ui->comboBox_family->currentText();
     QString stem         = family;
-    if (!selected_char.isNull()) {
-        stem
-            += QString("_U+%1").arg(selected_char.unicode(), 4, 16, QChar('0'));
+    if (selected_cp != 0) {
+        stem += QLatin1Char('_') + unicode_blocks::formatCodePoint(selected_cp);
     }
     stem.replace(QRegularExpression(R"([\/:*?"<>|])"), "_");
     const QString path = dir + "/" + stem + ".svg";

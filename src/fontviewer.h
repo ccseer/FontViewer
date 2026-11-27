@@ -30,8 +30,9 @@ protected:
     FontWidget *m_view;
     // False when the stored font_size was unusable and the view fell back to the
     // default; the invalid value must then be left in the file untouched.
-    bool m_font_size_valid = false;
-    bool m_info_loaded     = false;
+    bool m_font_size_valid      = false;
+    bool m_char_cell_size_valid = false;
+    bool m_info_loaded          = false;
 };
 
 /////////////////////////////////////////////////////////////////

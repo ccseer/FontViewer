@@ -25,10 +25,27 @@ constexpr auto g_ini_waterfall      = "waterfall_enabled";
 constexpr auto g_ini_invert         = "invert_preview";
 constexpr auto g_ini_show_outline   = "show_outline_points";
 constexpr auto g_ini_hidden_guides  = "hidden_guides";
+constexpr auto g_ini_char_cell_size = "char_cell_size";
 
 constexpr int g_def_pt                = 16;
+constexpr int g_def_char_cell_size    = 44;
 constexpr double g_def_line_height    = 1.4;
 constexpr double g_def_letter_spacing = 0.0;
+
+int loadBoundedIntSetting(const QSettings &ini, const char *key, int def_val,
+                          int min_val, int max_val, bool *valid_out)
+{
+    const QString k = QLatin1String(key);
+    if (!ini.contains(k)) {
+        *valid_out = true;
+        return def_val;
+    }
+    bool ok      = false;
+    const int v  = ini.value(k).toInt(&ok);
+    const bool valid = ok && v >= min_val && v <= max_val;
+    *valid_out       = valid;
+    return valid ? v : def_val;
+}
 }  // namespace
 
 FontViewer::FontViewer(QWidget *parent)
@@ -49,6 +66,9 @@ FontViewer::~FontViewer()
         m_ini->setValue(g_ini_waterfall, m_view->isWaterfallEnabled());
         m_ini->setValue(g_ini_invert, m_view->isInvertPreview());
         m_ini->setValue(g_ini_show_outline, m_view->isShowOutlinePoints());
+        if (m_char_cell_size_valid) {
+            m_ini->setValue(g_ini_char_cell_size, m_view->charCellSizeDp());
+        }
         const QStringList hidden_guides = m_view->hiddenGuideIds();
         if (hidden_guides.isEmpty()) {
             m_ini->remove(g_ini_hidden_guides);
@@ -123,17 +143,8 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
     m_view->loadPresets(*m_ini);
     // A missing key must not turn into 0 pt, and an out-of-range value must not
     // be written back on close unless the user later picks a valid size.
-    if (!m_ini->contains(g_ini_font_size)) {
-        m_font_size_valid = true;
-        m_view->setCurrentFontSize(g_def_pt);
-    }
-    else {
-        bool size_ok          = false;
-        const int stored_size = m_ini->value(g_ini_font_size).toInt(&size_ok);
-        m_font_size_valid
-            = (size_ok && stored_size >= 1 && stored_size <= 999);
-        m_view->setCurrentFontSize(m_font_size_valid ? stored_size : g_def_pt);
-    }
+    m_view->setCurrentFontSize(loadBoundedIntSetting(
+        *m_ini, g_ini_font_size, g_def_pt, 1, 999, &m_font_size_valid));
     connect(m_view, &FontWidget::sigFontSizeChanged, this,
             [this](int) { m_font_size_valid = true; });
     m_view->setCollapsed(m_ini->value(g_ini_collapsed, false).toBool());
@@ -154,6 +165,11 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
     m_view->setInvertPreview(m_ini->value(g_ini_invert, false).toBool());
     m_view->setShowOutlinePoints(
         m_ini->value(g_ini_show_outline, false).toBool());
+    m_view->setCharCellSizeDp(loadBoundedIntSetting(
+        *m_ini, g_ini_char_cell_size, g_def_char_cell_size, 28, 80,
+        &m_char_cell_size_valid));
+    connect(m_view, &FontWidget::sigCharCellSizeChanged, this,
+            [this](int) { m_char_cell_size_valid = true; });
     m_view->setHiddenGuideIds(
         m_ini->value(g_ini_hidden_guides).toStringList());
 

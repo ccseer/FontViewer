@@ -12,6 +12,7 @@
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -76,114 +77,8 @@ QString formatPresetTitle(const QString &title)
            + QChar(0x2026);
 }
 
-// Host-aligned rounded surface card behind the Text editor and Waterfall stack:
-// follows the OS corner style (8*dpr on Windows 11+, square on Windows 10) and
-// draws the accent border when the editor holds focus.
-class PreviewSurfaceFrame : public QWidget {
-public:
-    explicit PreviewSurfaceFrame(QWidget *parent = nullptr) : QWidget(parent)
-    {
-        setFocusPolicy(Qt::NoFocus);
-        m_layout = new QVBoxLayout(this);
-        updateMetrics();
-    }
-
-    void addContent(QWidget *w)
-    {
-        if (m_layout) {
-            m_layout->addWidget(w);
-        }
-    }
-
-    void setDpr(qreal dpr)
-    {
-        const qreal clamped = fontui::clampDpr(dpr);
-        if (qFuzzyCompare(m_dpr, clamped)) {
-            return;
-        }
-        m_dpr = clamped;
-        updateMetrics();
-        update();
-    }
-
-    void setInverted(bool inverted)
-    {
-        if (m_inverted == inverted) {
-            return;
-        }
-        m_inverted = inverted;
-        update();
-    }
-
-    void setFocused(bool focused)
-    {
-        if (m_focused == focused) {
-            return;
-        }
-        m_focused = focused;
-        update();
-    }
-
-    void setWaterfallActive(bool active)
-    {
-        if (m_waterfall == active) {
-            return;
-        }
-        m_waterfall = active;
-        update();
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override
-    {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-
-        const QPalette &pal = palette();
-        const QColor bg     = m_inverted
-                                  ? pal.color(QPalette::Active, QPalette::Text)
-                                  : pal.color(QPalette::Active, QPalette::Base);
-        QColor border       = fontui::frameBorderColor(pal);
-        if (m_focused && !m_waterfall) {
-            border = fontui::accentColor(pal);
-            border.setAlpha(220);
-        }
-
-        const qreal pen_w  = fontui::dpf(1.0, m_dpr);
-        const qreal radius = fontui::surfaceRadius(m_dpr, true);
-        const QRectF r = QRectF(rect()).adjusted(pen_w * 0.5, pen_w * 0.5,
-                                                 -pen_w * 0.5, -pen_w * 0.5);
-
-        painter.setPen(QPen(border, pen_w));
-        painter.setBrush(bg);
-        if (radius > 0.0) {
-            painter.drawRoundedRect(r, radius, radius);
-        }
-        else {
-            painter.drawRect(r);
-        }
-    }
-
-private:
-    void updateMetrics()
-    {
-        if (!m_layout) {
-            return;
-        }
-        const qreal radius = fontui::surfaceRadius(m_dpr, true);
-        const int inset
-            = qMax(fontui::dp(2, m_dpr), qCeil(radius * 0.55));
-        m_layout->setContentsMargins(inset, inset, inset, inset);
-        m_layout->setSpacing(0);
-    }
-
-    QVBoxLayout *m_layout = nullptr;
-    qreal m_dpr           = 1.0;
-    bool m_inverted       = false;
-    bool m_focused        = false;
-    bool m_waterfall      = false;
-};
-
+// Host-aligned floating popup container for compact Aa line height / spacing
+// sliders.
 class AaPopupPanel : public QFrame {
 public:
     explicit AaPopupPanel(QWidget *parent = nullptr) : QFrame(parent)
@@ -231,127 +126,6 @@ protected:
 
 private:
     qreal m_dpr = 1.0;
-};
-
-class SliderValueBadge final : public QLabel {
-public:
-    explicit SliderValueBadge(qreal dpr, QWidget *parent = nullptr)
-        : QLabel(parent), m_dpr(fontui::clampDpr(dpr))
-    {
-        setFocusPolicy(Qt::NoFocus);
-        setAlignment(Qt::AlignCenter);
-        QFont f = font();
-        f.setPointSizeF(qMax(8.0, f.pointSizeF() - 1.0));
-        if (const auto tnum = QFont::Tag::fromString("tnum"); tnum.has_value()) {
-            f.setFeature(*tnum, 1);
-        }
-        setFont(f);
-        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        updateMetrics();
-    }
-
-    void setDpr(qreal dpr)
-    {
-        const qreal clamped = fontui::clampDpr(dpr);
-        if (qFuzzyCompare(m_dpr, clamped)) {
-            return;
-        }
-        m_dpr = clamped;
-        updateMetrics();
-        update();
-    }
-
-    void setModified(bool modified)
-    {
-        if (m_modified == modified) {
-            return;
-        }
-        m_modified = modified;
-        QFont f    = font();
-        f.setWeight(modified ? QFont::Medium : QFont::Normal);
-        setFont(f);
-        updateGeometry();
-        update();
-    }
-
-    bool isModified() const
-    {
-        return m_modified;
-    }
-
-    QSize sizeHint() const override
-    {
-        // Measure at Medium weight so toggling modified state never clips
-        // or forces a fixed-size jump.
-        QFont f = font();
-        f.setWeight(QFont::Medium);
-        const QFontMetrics fm(f);
-        const int w = fm.horizontalAdvance(QStringLiteral("-20.0"))
-                      + fontui::dp(10, m_dpr);
-        const int h = fm.height() + fontui::dp(4, m_dpr);
-        return QSize(w, h);
-    }
-
-    QSize minimumSizeHint() const override
-    {
-        return sizeHint();
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override
-    {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-
-        const QPalette &pal  = palette();
-        const bool dark      = fontui::isDarkPalette(pal);
-        const QColor fg_base = pal.color(QPalette::WindowText);
-        const qreal pen_w    = fontui::dpf(1.0, m_dpr);
-        const qreal radius   = fontui::surfaceRadius(m_dpr, false);
-        const QRectF r = QRectF(rect()).adjusted(pen_w * 0.5, pen_w * 0.5,
-                                                 -pen_w * 0.5, -pen_w * 0.5);
-
-        QColor bg;
-        QColor border;
-        QColor fg;
-        if (m_modified) {
-            const QColor accent = fontui::accentColor(pal);
-            bg                  = accent;
-            bg.setAlpha(dark ? 44 : 26);
-            border = accent;
-            border.setAlpha(dark ? 175 : 155);
-            fg = fg_base;
-        }
-        else {
-            bg = fg_base;
-            bg.setAlpha(dark ? 16 : 10);
-            border = fontui::frameBorderColor(pal);
-            fg     = fontui::mutedTextColor(pal);
-        }
-
-        painter.setPen(QPen(border, pen_w));
-        painter.setBrush(bg);
-        if (radius > 0.0) {
-            painter.drawRoundedRect(r, radius, radius);
-        }
-        else {
-            painter.drawRect(r);
-        }
-
-        painter.setPen(fg);
-        painter.setFont(font());
-        painter.drawText(r, Qt::AlignCenter, text());
-    }
-
-private:
-    void updateMetrics()
-    {
-        const QSize sz = sizeHint();
-        setFixedSize(sz);
-    }
-
-    qreal m_dpr     = 1.0;
-    bool m_modified = false;
 };
 
 // Keeps the Text tab toolbar on a single row when wide, moves line height and
@@ -826,7 +600,7 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
         slider->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         slider->setFocusPolicy(Qt::NoFocus);
         slider->setToolTip(tip);
-        auto *value_label = new SliderValueBadge(m_dpr, host);
+        auto *value_label = new fontui::ValueBadge(m_dpr, QStringLiteral("-20.0"), host);
         value_label->setObjectName(badge_obj_name);
         lay->addWidget(caption);
         lay->addWidget(slider);
@@ -897,7 +671,7 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
     auto *surface_lay = new QVBoxLayout(m_surface_host);
     surface_lay->setSpacing(0);
 
-    auto *frame     = new PreviewSurfaceFrame(m_surface_host);
+    auto *frame     = new fontui::SurfaceFrame(m_surface_host);
     m_surface_frame = frame;
 
     m_stack = new QStackedWidget(frame);
@@ -944,7 +718,7 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
     connect(m_edit, &FontPreviewEdit::sigFocusChanged, this,
             [this](bool focused) {
                 if (m_surface_frame) {
-                    static_cast<PreviewSurfaceFrame *>(m_surface_frame)
+                    static_cast<fontui::SurfaceFrame *>(m_surface_frame)
                         ->setFocused(focused);
                 }
             });
@@ -1017,12 +791,12 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
 
     if (m_label_line) {
         m_label_line->setText(QString::number(m_line_height, 'f', 1));
-        static_cast<SliderValueBadge *>(m_label_line)
+        static_cast<fontui::ValueBadge *>(m_label_line)
             ->setModified(!qFuzzyCompare(m_line_height, 1.4));
     }
     if (m_label_space) {
         m_label_space->setText(QString::number(m_letter_spacing, 'f', 1));
-        static_cast<SliderValueBadge *>(m_label_space)
+        static_cast<fontui::ValueBadge *>(m_label_space)
             ->setModified(!qFuzzyIsNull(m_letter_spacing));
     }
 
@@ -1056,7 +830,7 @@ void TextPreviewTab::updateLayoutMetrics()
             fontui::dp(8, m_dpr));
     }
     if (m_surface_frame) {
-        static_cast<PreviewSurfaceFrame *>(m_surface_frame)->setDpr(m_dpr);
+        static_cast<fontui::SurfaceFrame *>(m_surface_frame)->setDpr(m_dpr);
     }
     if (m_edit) {
         m_edit->setDpr(m_dpr);
@@ -1081,7 +855,9 @@ void TextPreviewTab::updateLayoutMetrics()
             slider->setMaximumWidth(track_w + fontui::dp(32, m_dpr));
         }
         if (val_lbl) {
-            static_cast<SliderValueBadge *>(val_lbl)->setDpr(m_dpr);
+            auto *badge = static_cast<fontui::ValueBadge *>(val_lbl);
+            badge->setDpr(m_dpr);
+            badge->refreshFont();
         }
     };
     rescale_slider_host(m_slider_line, m_label_line);
@@ -1296,7 +1072,7 @@ void TextPreviewTab::setLineHeight(qreal h)
     }
     if (m_label_line) {
         m_label_line->setText(QString::number(m_line_height, 'f', 1));
-        static_cast<SliderValueBadge *>(m_label_line)
+        static_cast<fontui::ValueBadge *>(m_label_line)
             ->setModified(!qFuzzyCompare(m_line_height, 1.4));
     }
     if (m_edit) {
@@ -1317,7 +1093,7 @@ void TextPreviewTab::setLetterSpacing(qreal s)
     }
     if (m_label_space) {
         m_label_space->setText(QString::number(m_letter_spacing, 'f', 1));
-        static_cast<SliderValueBadge *>(m_label_space)
+        static_cast<fontui::ValueBadge *>(m_label_space)
             ->setModified(!qFuzzyIsNull(m_letter_spacing));
     }
     if (m_features_bar) {
@@ -1338,7 +1114,7 @@ void TextPreviewTab::setWaterfallEnabled(bool on)
         m_stack->setCurrentIndex(on ? 1 : 0);
     }
     if (m_surface_frame) {
-        static_cast<PreviewSurfaceFrame *>(m_surface_frame)
+        static_cast<fontui::SurfaceFrame *>(m_surface_frame)
             ->setWaterfallActive(on);
     }
     if (m_line_host) {
@@ -1401,7 +1177,7 @@ void TextPreviewTab::applyInvertPreview()
     }
 
     if (m_surface_frame) {
-        static_cast<PreviewSurfaceFrame *>(m_surface_frame)
+        static_cast<fontui::SurfaceFrame *>(m_surface_frame)
             ->setInverted(m_invert_preview);
     }
     if (m_waterfall) {
@@ -1425,7 +1201,7 @@ void TextPreviewTab::syncStackIndex()
         m_stack->setCurrentIndex(m_waterfall_enabled ? 1 : 0);
     }
     if (m_surface_frame) {
-        static_cast<PreviewSurfaceFrame *>(m_surface_frame)
+        static_cast<fontui::SurfaceFrame *>(m_surface_frame)
             ->setWaterfallActive(m_waterfall_enabled);
     }
 }
@@ -1547,15 +1323,23 @@ bool TextPreviewTab::prepareSvgExport(
     if (m_waterfall_enabled && m_waterfall) {
         size_out       = m_waterfall->contentSize();
         background_out = m_waterfall->baseColor();
-        draw_out = [wf = m_waterfall](QPainter &p) { wf->renderContent(&p); };
+        QPointer<WaterfallWidget> safe_wf(m_waterfall);
+        draw_out = [safe_wf](QPainter &p) {
+            if (safe_wf) {
+                safe_wf->renderContent(&p);
+            }
+        };
         return true;
     }
     if (m_edit) {
         const QSizeF doc_size = prepareEditDocumentSize();
         size_out = QSize(qCeil(doc_size.width()), qCeil(doc_size.height()));
         background_out = m_edit->palette().color(QPalette::Base);
-        draw_out       = [this, doc_size](QPainter &p) {
-            drawEditDocument(p, doc_size);
+        QPointer<const TextPreviewTab> safe_self(this);
+        draw_out = [safe_self, doc_size](QPainter &p) {
+            if (safe_self) {
+                safe_self->drawEditDocument(p, doc_size);
+            }
         };
         return true;
     }
@@ -1565,8 +1349,13 @@ bool TextPreviewTab::prepareSvgExport(
 void TextPreviewTab::changeEvent(QEvent *event)
 {
     QWidget::changeEvent(event);
-    if (event->type() == QEvent::PaletteChange
-        || event->type() == QEvent::ApplicationPaletteChange) {
+    if (event->type() == QEvent::StyleChange
+        || event->type() == QEvent::FontChange) {
+        updateLayoutMetrics();
+        refreshToolbarAndAaPanel();
+    }
+    else if (event->type() == QEvent::PaletteChange
+             || event->type() == QEvent::ApplicationPaletteChange) {
         applyInvertPreview();
         updateWaterfall();
         if (m_features_bar) {
@@ -1580,6 +1369,9 @@ void TextPreviewTab::changeEvent(QEvent *event)
         }
         if (m_label_space) {
             m_label_space->update();
+        }
+        if (m_btn_reset) {
+            m_btn_reset->update();
         }
     }
 }

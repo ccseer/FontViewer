@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QFont>
 #include <QPalette>
 #include <QRectF>
@@ -16,8 +17,10 @@
 
 class QLabel;
 class QPushButton;
+class QTimer;
 class QVBoxLayout;
 class QGroupBox;
+class QHideEvent;
 
 namespace fontui {
 class FlowSeparator;
@@ -51,11 +54,22 @@ class GlyphInspectorWidget : public QWidget {
 public:
     explicit GlyphInspectorWidget(QWidget *parent = nullptr);
 
+    void updateGlyph(quint32 code_point,
+                     const QFont &font,
+                     const QString &font_path,
+                     const FontDecorationMetrics &deco = {},
+                     const GlyphOutlineData &outline   = {},
+                     const QString &glyph_name         = {});
     void updateGlyph(QChar ch,
                      const QFont &font,
                      const QString &font_path,
                      const FontDecorationMetrics &deco = {},
-                     const GlyphOutlineData &outline   = {});
+                     const GlyphOutlineData &outline   = {},
+                     const QString &glyph_name         = {})
+    {
+        updateGlyph(ch.isNull() ? 0u : quint32(ch.unicode()), font, font_path,
+                    deco, outline, glyph_name);
+    }
     void setDpr(qreal dpr);
     void clearSelection();
     QPixmap getPreviewPixmap() const;
@@ -63,9 +77,16 @@ public:
     {
         return m_has_selection;
     }
+    quint32 currentCodePoint() const
+    {
+        return m_code_point;
+    }
     QChar currentChar() const
     {
-        return m_char;
+        return (m_code_point > 0 && m_code_point <= 0xFFFFu
+                && !(m_code_point >= 0xD800u && m_code_point <= 0xDFFFu))
+                   ? QChar(ushort(m_code_point))
+                   : QChar();
     }
     const QFont &currentFont() const
     {
@@ -96,7 +117,8 @@ public:
 public slots:
     void updateFont(const QFont &font,
                     const FontDecorationMetrics &deco = {},
-                    const GlyphOutlineData &outline   = {});
+                    const GlyphOutlineData &outline   = {},
+                    const QString &glyph_name         = {});
     void updateTheme(int theme);
 
 protected:
@@ -107,21 +129,23 @@ private:
 
     void createUI();
     void applyEmptyLabelPalette();
+    void syncEmptyLabelFont();
+    void syncMetricsAndFonts();
     void updateMetrics();
     void updateLabels();
-    void syncGuideControls();
+    void syncGuideControls(bool animate = false);
     bool hasHiddenAvailableGuide(
         const std::array<bool, kGuideCount> &availability) const;
     void updateToggleAllButton(
         const std::array<bool, kGuideCount> &availability);
     void refreshThemeVisuals();
     std::array<bool, kGuideCount> computeGuideAvailability() const;
-    QString getUnicodeBlockName(ushort code_point);
 
     // Data
-    QChar m_char;
+    quint32 m_code_point = 0;
     QFont m_font;
     QString m_font_path;
+    QString m_glyph_name;
     FontDecorationMetrics m_deco_metrics;
     GlyphOutlineData m_outline;
     bool m_has_selection       = false;
@@ -129,6 +153,7 @@ private:
 
     // Metrics cache
     struct GlyphMetrics {
+        quint32 glyph_id    = 0;
         qreal advance_width = 0;
         QRectF bounding_box;
         qreal left_bearing  = 0;
@@ -143,6 +168,7 @@ private:
     QLabel *m_label_unicode_value;
     QLabel *m_label_unicode_decimal;
     QLabel *m_label_unicode_block;
+    QLabel *m_label_glyph_id = nullptr;
     QLabel *m_label_advance_width;
     QLabel *m_label_bbox;
     QLabel *m_label_bearings;
@@ -181,28 +207,45 @@ public:
     explicit GlyphPreviewWidget(QWidget *parent = nullptr);
 
     void setDpr(qreal dpr);
-    void setGlyphData(QChar ch,
+    void setGlyphData(quint32 code_point,
                       const QFont &font,
                       const QRectF &bbox,
                       qreal advance_width,
                       const FontDecorationMetrics &deco = {},
                       const GlyphOutlineData &outline   = {});
-    void setShowOutlinePoints(bool on);
+    void setGlyphData(QChar ch,
+                      const QFont &font,
+                      const QRectF &bbox,
+                      qreal advance_width,
+                      const FontDecorationMetrics &deco = {},
+                      const GlyphOutlineData &outline   = {})
+    {
+        setGlyphData(ch.isNull() ? 0u : quint32(ch.unicode()), font, bbox,
+                     advance_width, deco, outline);
+    }
+    void setShowOutlinePoints(bool on, bool animate = false);
     bool isShowOutlinePoints() const
     {
         return m_show_outline_points;
     }
-    void setGuideVisible(GlyphGuideId id, bool visible);
+    void setGuideVisible(GlyphGuideId id, bool visible, bool animate = true);
     bool isGuideVisible(GlyphGuideId id) const
     {
         return !m_hidden_guides.contains(id);
     }
-    void setHiddenGuides(const QSet<GlyphGuideId> &hidden);
+    void setHiddenGuides(const QSet<GlyphGuideId> &hidden, bool animate = false);
     const QSet<GlyphGuideId> &hiddenGuides() const
     {
         return m_hidden_guides;
     }
     void clear();
+
+    qreal guideOpacity(GlyphGuideId id) const;
+    qreal outlineOpacity() const
+    {
+        return m_outline_alpha;
+    }
+    bool isGuideAnimating() const;
 
     QVector<QRectF> lastLabelRects() const
     {
@@ -228,10 +271,17 @@ public:
     QSize sizeHint() const override;
 
 protected:
+    void hideEvent(QHideEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
 private:
-    QChar m_char;
+    static constexpr int kGuideCount     = 11;
+    static constexpr int kAnimDurationMs = 150;
+
+    void syncAnimationState(bool animate);
+    void advanceAnimations();
+
+    quint32 m_code_point = 0;
     QFont m_font;
     QRectF m_bbox;
     FontDecorationMetrics m_deco_metrics;
@@ -241,6 +291,14 @@ private:
     bool m_has_data             = false;
     bool m_show_outline_points  = false;
     QSet<GlyphGuideId> m_hidden_guides;
+    std::array<qreal, kGuideCount> m_guide_alphas{};
+    std::array<qreal, kGuideCount> m_guide_from{};
+    std::array<qreal, kGuideCount> m_guide_targets{};
+    qreal m_outline_alpha  = 0.0;
+    qreal m_outline_from   = 0.0;
+    qreal m_outline_target = 0.0;
+    QTimer *m_anim_timer   = nullptr;
+    QElapsedTimer m_anim_clock;
     mutable QVector<QRectF> m_last_label_rects;
     mutable QStringList m_last_label_texts;
     mutable QRectF m_last_underline_band;

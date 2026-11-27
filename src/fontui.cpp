@@ -3,7 +3,9 @@
 #include <QByteArray>
 #include <QComboBox>
 #include <QDebug>
+#include <QEvent>
 #include <QFontMetrics>
+#include <QGuiApplication>
 #include <QListView>
 #include <QPainter>
 #include <QPixmap>
@@ -11,6 +13,7 @@
 #include <QScrollBar>
 #include <QSizePolicy>
 #include <QSvgRenderer>
+#include <QVBoxLayout>
 #include <QtMath>
 
 namespace fontui {
@@ -140,6 +143,20 @@ QSize CompactActionButton::sizeHint() const
 QSize CompactActionButton::minimumSizeHint() const
 {
     return sizeHint();
+}
+
+void CompactActionButton::changeEvent(QEvent *event)
+{
+    QPushButton::changeEvent(event);
+    if (event->type() == QEvent::StyleChange
+        || event->type() == QEvent::FontChange) {
+        updateGeometry();
+        update();
+    }
+    else if (event->type() == QEvent::PaletteChange
+             || event->type() == QEvent::ApplicationPaletteChange) {
+        update();
+    }
 }
 
 void CompactActionButton::paintEvent(QPaintEvent *)
@@ -411,6 +428,275 @@ int FlowLayout::doLayout(const QRect &rect, bool test_only) const
         flush_line();
     }
     return y + line_height - rect.y() + bottom;
+}
+
+SurfaceFrame::SurfaceFrame(QWidget *parent) : QWidget(parent)
+{
+    setFocusPolicy(Qt::NoFocus);
+    m_layout = new QVBoxLayout(this);
+    updateMetrics();
+}
+
+void SurfaceFrame::addContent(QWidget *w)
+{
+    if (m_layout) {
+        m_layout->addWidget(w);
+    }
+}
+
+void SurfaceFrame::setDpr(qreal dpr)
+{
+    const qreal clamped = clampDpr(dpr);
+    if (qFuzzyCompare(m_dpr, clamped)) {
+        return;
+    }
+    m_dpr = clamped;
+    updateMetrics();
+    updateGeometry();
+    update();
+}
+
+void SurfaceFrame::setInverted(bool inverted)
+{
+    if (m_inverted == inverted) {
+        return;
+    }
+    m_inverted = inverted;
+    update();
+}
+
+void SurfaceFrame::setFocused(bool focused)
+{
+    if (m_focused == focused) {
+        return;
+    }
+    m_focused = focused;
+    update();
+}
+
+void SurfaceFrame::setWaterfallActive(bool active)
+{
+    if (m_waterfall == active) {
+        return;
+    }
+    m_waterfall = active;
+    update();
+}
+
+void SurfaceFrame::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QPalette &pal = palette();
+    const QColor bg     = m_inverted ? pal.color(QPalette::Active, QPalette::Text)
+                                     : pal.color(QPalette::Active, QPalette::Base);
+    QColor border       = frameBorderColor(pal);
+    if (m_focused && !m_waterfall) {
+        border = accentColor(pal);
+        border.setAlpha(220);
+    }
+
+    const qreal pen_w  = dpf(1.0, m_dpr);
+    const qreal radius = surfaceRadius(m_dpr, true);
+    const QRectF r = QRectF(rect()).adjusted(pen_w * 0.5, pen_w * 0.5,
+                                             -pen_w * 0.5, -pen_w * 0.5);
+
+    painter.setPen(QPen(border, pen_w));
+    painter.setBrush(bg);
+    if (radius > 0.0) {
+        painter.drawRoundedRect(r, radius, radius);
+    }
+    else {
+        painter.drawRect(r);
+    }
+}
+
+void SurfaceFrame::updateMetrics()
+{
+    if (!m_layout) {
+        return;
+    }
+    const qreal radius = surfaceRadius(m_dpr, true);
+    const int inset    = qMax(dp(2, m_dpr), qCeil(radius * 0.55));
+    m_layout->setContentsMargins(inset, inset, inset, inset);
+    m_layout->setSpacing(0);
+}
+
+ValueBadge::ValueBadge(qreal dpr,
+                       const QString &sample_width_text,
+                       QWidget *parent)
+    : QLabel(parent),
+      m_dpr(clampDpr(dpr)),
+      m_sample_width_text(sample_width_text)
+{
+    setFocusPolicy(Qt::NoFocus);
+    setAlignment(Qt::AlignCenter);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    syncFont();
+    updateMetrics();
+}
+
+void ValueBadge::setDpr(qreal dpr)
+{
+    const qreal clamped = clampDpr(dpr);
+    if (qFuzzyCompare(m_dpr, clamped)) {
+        return;
+    }
+    m_dpr = clamped;
+    syncFont();
+    updateMetrics();
+    updateGeometry();
+    update();
+}
+
+void ValueBadge::refreshFont()
+{
+    syncFont();
+    updateMetrics();
+    updateGeometry();
+    update();
+}
+
+void ValueBadge::setModified(bool modified)
+{
+    if (m_modified == modified) {
+        return;
+    }
+    m_modified = modified;
+    syncFont();
+    updateGeometry();
+    update();
+}
+
+void ValueBadge::syncFont()
+{
+    if (m_syncing_font) {
+        return;
+    }
+    QFont f = scaledCaptionFont(this, m_dpr, -1.0, 8.0, 0.88);
+    if (const auto tnum = QFont::Tag::fromString("tnum"); tnum.has_value()) {
+        f.setFeature(*tnum, 1);
+    }
+    f.setWeight(m_modified ? QFont::Medium : QFont::Normal);
+    if (font() != f) {
+        m_syncing_font = true;
+        setFont(f);
+        m_syncing_font = false;
+    }
+}
+
+QSize ValueBadge::sizeHint() const
+{
+    QFont f = font();
+    f.setWeight(QFont::Medium);
+    const QFontMetrics fm(f);
+    const int w = fm.horizontalAdvance(m_sample_width_text) + dp(10, m_dpr);
+    const int h = fm.height() + dp(4, m_dpr);
+    return QSize(w, h);
+}
+
+QSize ValueBadge::minimumSizeHint() const
+{
+    return sizeHint();
+}
+
+void ValueBadge::changeEvent(QEvent *event)
+{
+    QLabel::changeEvent(event);
+    if (event->type() == QEvent::StyleChange
+        || event->type() == QEvent::FontChange) {
+        if (!m_syncing_font) {
+            syncFont();
+        }
+        updateMetrics();
+        updateGeometry();
+        update();
+    }
+    else if (event->type() == QEvent::PaletteChange
+             || event->type() == QEvent::ApplicationPaletteChange) {
+        update();
+    }
+}
+
+void ValueBadge::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    if (!isEnabled()) {
+        painter.setOpacity(0.45);
+    }
+
+    const QPalette &pal  = palette();
+    const bool dark      = isDarkPalette(pal);
+    const QColor fg_base = pal.color(QPalette::WindowText);
+    const qreal pen_w    = dpf(1.0, m_dpr);
+    const qreal radius   = surfaceRadius(m_dpr, false);
+    const QRectF r = QRectF(rect()).adjusted(pen_w * 0.5, pen_w * 0.5,
+                                             -pen_w * 0.5, -pen_w * 0.5);
+
+    QColor bg;
+    QColor border;
+    QColor fg;
+    if (m_modified) {
+        const QColor accent = accentColor(pal);
+        bg                  = accent;
+        bg.setAlpha(dark ? 44 : 26);
+        border = accent;
+        border.setAlpha(dark ? 175 : 155);
+        fg = fg_base;
+    }
+    else {
+        bg = fg_base;
+        bg.setAlpha(dark ? 16 : 10);
+        border = frameBorderColor(pal);
+        fg     = mutedTextColor(pal);
+    }
+
+    painter.setPen(QPen(border, pen_w));
+    painter.setBrush(bg);
+    if (radius > 0.0) {
+        painter.drawRoundedRect(r, radius, radius);
+    }
+    else {
+        painter.drawRect(r);
+    }
+
+    painter.setPen(fg);
+    painter.setFont(font());
+    painter.drawText(r, Qt::AlignCenter, text());
+}
+
+void ValueBadge::updateMetrics()
+{
+    setFixedSize(sizeHint());
+}
+
+QFont scaledCaptionFont(const QWidget *widget,
+                        qreal dpr,
+                        qreal delta_pt,
+                        qreal min_pt,
+                        qreal pixel_ratio)
+{
+    const QWidget *source = (widget && widget->parentWidget())
+                                ? widget->parentWidget()
+                                : widget;
+    QFont f = source ? source->font() : QGuiApplication::font();
+    const qreal clamped = clampDpr(dpr);
+    if (f.pixelSize() > 0) {
+        const int min_px = qMax(10, qRound(min_pt * clamped));
+        f.setPixelSize(qMax(min_px, qRound(f.pixelSize() * pixel_ratio)));
+    }
+    else {
+        const qreal base_pt   = f.pointSizeF() > 0.0 ? f.pointSizeF() : 9.0;
+        const qreal target_pt = qMax(min_pt, base_pt + delta_pt);
+        const qreal dev_dpr   = widget ? widget->devicePixelRatioF() : 1.0;
+        // Scale manually only when native Qt HiDPI scaling is disabled
+        // (Seer host sets QT_ENABLE_HIGHDPI_SCALING=0 -> dev_dpr == 1.0).
+        const qreal scale = dev_dpr <= 1.05 ? clamped : 1.0;
+        f.setPointSizeF(target_pt * scale);
+    }
+    return f;
 }
 
 }  // namespace fontui

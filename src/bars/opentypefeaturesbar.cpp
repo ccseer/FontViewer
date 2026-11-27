@@ -81,12 +81,9 @@ public:
         // paintEvent() reads underMouse(), but hover enter/leave events (and the
         // repaint they trigger) are only delivered when WA_Hover is set.
         setAttribute(Qt::WA_Hover, true);
-        QFont f = font();
-        f.setPointSizeF(qMax(8.0, f.pointSizeF() - 1.0));
-        setFont(f);
-        setText(formatFeaturePillText(m_info, fontMetrics(), m_dpr));
         setShortcut(QKeySequence());
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        syncFont();
     }
 
     void setDpr(qreal dpr)
@@ -96,6 +93,20 @@ public:
             return;
         }
         m_dpr = clamped;
+        syncFont();
+    }
+
+    void syncFont()
+    {
+        if (m_syncing_font) {
+            return;
+        }
+        const QFont f = fontui::scaledCaptionFont(this, m_dpr, -1.0, 8.0, 0.88);
+        if (font() != f) {
+            m_syncing_font = true;
+            setFont(f);
+            m_syncing_font = false;
+        }
         setText(formatFeaturePillText(m_info, fontMetrics(), m_dpr));
         updateGeometry();
         update();
@@ -122,6 +133,16 @@ public:
     }
 
 protected:
+    void changeEvent(QEvent *event) override
+    {
+        QPushButton::changeEvent(event);
+        if (!m_syncing_font
+            && (event->type() == QEvent::FontChange
+                || event->type() == QEvent::StyleChange)) {
+            syncFont();
+        }
+    }
+
     void paintEvent(QPaintEvent *) override
     {
         QPainter painter(this);
@@ -214,7 +235,8 @@ private:
     }
 
     FontFeatureInfo m_info;
-    qreal m_dpr = 1.0;
+    qreal m_dpr         = 1.0;
+    bool m_syncing_font = false;
 };
 
 class FeaturePillsContainer : public QWidget {
@@ -363,9 +385,16 @@ void OpenTypeFeaturesBar::updateLayoutMetrics()
         for (const FeaturePillControl &ctrl : m_controls) {
             if (auto *btn = static_cast<FeaturePillButton *>(ctrl.button)) {
                 btn->setDpr(m_dpr);
+                btn->syncFont();
             }
         }
         m_pills_host->updateGeometry();
+    }
+    if (m_body_layout) {
+        m_body_layout->invalidate();
+    }
+    if (m_root_layout) {
+        m_root_layout->invalidate();
     }
     updateGeometry();
 }
@@ -386,6 +415,14 @@ void OpenTypeFeaturesBar::applyPalette()
                           fontui::mutedTextColor(palette()));
         m_note->setPalette(note_pal);
     }
+    if (m_reset) {
+        m_reset->update();
+    }
+    for (const FeaturePillControl &ctrl : m_controls) {
+        if (ctrl.button) {
+            ctrl.button->update();
+        }
+    }
     for (fontui::FlowSeparator *sep : m_separators) {
         if (sep) {
             sep->update();
@@ -396,8 +433,14 @@ void OpenTypeFeaturesBar::applyPalette()
 void OpenTypeFeaturesBar::changeEvent(QEvent *event)
 {
     QWidget::changeEvent(event);
-    if (event->type() == QEvent::PaletteChange
-        || event->type() == QEvent::ApplicationPaletteChange) {
+    if (event->type() == QEvent::StyleChange
+        || event->type() == QEvent::FontChange) {
+        updateLayoutMetrics();
+        updateScrollAreaHeight();
+        applyPalette();
+    }
+    else if (event->type() == QEvent::PaletteChange
+             || event->type() == QEvent::ApplicationPaletteChange) {
         applyPalette();
     }
 }
