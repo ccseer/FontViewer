@@ -1,43 +1,27 @@
 # FontViewer — a Seer Plugin for Previewing Fonts
 
-FontViewer is a fast, native font preview plugin for [Seer](https://1218.io) — the original and fastest Quick Look tool for Windows. Seer pioneered instant file preview on the platform, and FontViewer extends it so you can preview font files with zero lag: drop any font into Seer and instantly see a full glyph table, inspect per-character metrics, preview sample text, and browse metadata — no heavy font manager needed.
+FontViewer is a fast, native font preview plugin for [Seer](https://1218.io) — the original and fastest Quick Look tool for Windows. Drop any font file into Seer and inspect typography, variable axes, OpenType features, full Unicode coverage, and glyph outlines with zero lag.
 
 ## Features
 
-- **Quick font preview** in Seer — press Space on any `.ttf`, `.otf`, `.ttc`, or `.otc` file
-- **Glyph table** showing every Unicode codepoint the font covers
-- **Glyph Inspector** with per-glyph metrics: advance width, bounding box, left/right bearings, and a visual preview with annotated guide lines
-- **Sample text rendering** with editable pangram presets at any point size
-- **OpenType name table** — copyright, family, subfamily, designer, license, and more
-- **Font metrics** — ascent, descent, line gap, units-per-em
-- **Copy as image** and **Save as SVG**
-- **Dark and light theme** support matching Seer's appearance
-- **Remembers** your last-used text, size, and layout preferences
-
-## The Fastest Font Preview on Windows
-
-Seer is the **first** and **fastest** Quick Look tool on Windows — it brought instant file preview to the platform before anyone else. Press Space on any file and get an immediate preview with no startup delay. FontViewer brings that same speed to font files, making it the best way to browse and inspect fonts on Windows without launching a resource-heavy editor.
-
-### Configuration (`fontviewer.ini`)
-
-#### Custom Text Presets (`[Presets]`)
-
-The Text tab provides three built-in presets (`Pangram`, `Paragraph`, `Digits & Symbols`). You can append your own presets under `[Presets]` in `fontviewer.ini`:
-
-- On first launch with an empty `[Presets]` section, FontViewer seeds three example presets (`Albus_Dumbledore`, `Best_App`, and `BoJack`) in `fontviewer.ini`; you can edit, add, or replace them freely, and empty/whitespace-only entries are ignored in the dropdown.
-- Each non-empty key under `[Presets]` appears below a separator using its INI key name as the label (prefer `underscores` or single words without spaces so Qt `IniFormat` does not write `%20`). Keys longer than 20 characters are elided in the dropdown with the full name shown on hover, and custom preset names do not widen the dropdown.
-- Use `\n` (or `\r\n`) for line breaks. Unquoted commas are preserved, and preset content is capped at 10,000 characters.
-- Selecting a preset previews it without overwriting your saved `user_text` (`Last used`) entry.
-
-```ini
-[Presets]
-CJK=永和九年，岁在癸丑\n天地玄黄，宇宙洪荒
-UI_Copy=Save, Cancel, Reset
-```
-
-#### Shortcuts (`[Shortcuts]`)
-
-Customizable keyboard shortcuts are stored under `[Shortcuts]` in `fontviewer.ini` and seeded with defaults on first launch. Set any shortcut value to `none` to unbind it. Zoom shortcuts (`Ctrl+=` and `Ctrl+-`) are built-in and fixed.
+- **Quick font preview in Seer 4.0.0+** — press `Space` on any `.ttf`, `.otf`, `.ttc`, or `.otc` file (including multi-face font collections)
+- **Collapsible Header & Theme Sync** — inspect family, styles, weight, writing systems, and character counts, or collapse the header (`Ctrl+B`) to maximize preview space; automatically adapts to Seer's DPI scaling and light/dark palettes
+- **Text Tab**
+  - Editable preview at any point size (`Ctrl+=` / `Ctrl+-` or `Ctrl+Wheel`)
+  - **Line height** (`1.0–2.5`) and **letter spacing** (`-5.0–20.0 px`), collapsing into a compact `Aa` popover on narrow panes
+  - **OpenType features** drawer with interactive GSUB/GPOS pills, active override counter, and one-click reset
+  - **Waterfall mode** (`10–72 pt` type scale) and **Invert Preview**
+  - Built-in and custom **text presets** persisted in `fontviewer.ini`
+- **Sample Tab** — multi-script specimen sections derived from the font's character coverage with one-click copy
+- **Characters Tab**
+  - Full **Unicode 16.0** block coverage (**338** blocks plus `Unassigned / Other`)
+  - Instant search by character, hex code point (`U+XXXX` / `0xXXXX`), block name, or PostScript glyph name
+  - Adjustable grid cell size (`28–80 dp` slider or `Ctrl+Wheel`), keyboard arrow navigation, and a bottom selection strip with click-to-copy chips (`U+`, `Dec`, `#GID`, glyph name), `Send to Text →`, and `Inspect →`
+- **Glyph Inspector Tab**
+  - High-precision **outline preview** with toggleable **outline points** (on-curve, conic, cubic) and toggleable **guide lines** (baseline, metrics, bounding box, bearings, underline/strikeout, grid)
+  - Per-glyph metrics (Unicode scalar/decimal/block, FreeType glyph ID & name, advance width, bounding box, bearings, contour/point counts, UPM)
+- **Variable Fonts & Typography** — detects variable font axes and named instances via FreeType, exposing real-time axis sliders (`VariableAxesBar`) synchronized across all four tabs
+- **Export & Persistence** — **Copy as Image** (`Ctrl+Shift+C`), **Save as SVG** (`Ctrl+S`), and persisted size, layout, preset, hidden-guide, and shortcut preferences in `fontviewer.ini`
 
 ## Screenshots
 
@@ -48,38 +32,41 @@ Customizable keyboard shortcuts are stored under `[Shortcuts]` in `fontviewer.in
 
 ## Building and Running
 
-Requirements: Qt 6.8, CMake 3.16+.
+**Requirements:** Windows (x64), MSVC 2022+ (C++17), Qt 6.8 (Core, Gui, Widgets, Svg, Test), CMake 3.16+, and internet access on initial configure for `FetchContent` dependencies (`Seer-sdk` and `FreeType 2.13.3`).
 
 1. **Clone the Repository**
 
-   ```bash
+   ```powershell
    git clone --recursive https://github.com/ccseer/FontViewer.git
-   cd FontViewer
+   cd FontViewer\src
    ```
 
-2. **Build**
+2. **Configure & Build**
 
-   ```bash
-   cd src
-   cmake -B build
-   cmake --build build
+   Set `QTDIR` to your Qt 6.8 MSVC installation (or pass `-DCMAKE_PREFIX_PATH=<qt-prefix>`):
+
+   ```powershell
+   $env:QTDIR = "C:\Path\To\Qt\6.8.x\msvc2022_64"
+   cmake -B build -DCMAKE_PREFIX_PATH="$env:QTDIR"
+   cmake --build build --config RelWithDebInfo
    ```
 
-   This produces two outputs:
+   This produces:
    - `fontviewer.dll` — the Seer plugin
-   - `test_fontviewer.exe` — standalone viewer for testing
+   - `test_fontviewer.exe` — standalone test host (`test_fontviewer.exe path\to\font.ttf`)
+   - `fontviewer_tests.exe` — automated Qt Test regression suite
 
-3. **Install the plugin**
+3. **Run Tests**
 
-   Copy `fontviewer.dll` to your Seer plugins directory.
+   ```powershell
+   ctest --test-dir build --output-on-failure
+   ```
 
-## Seer Plugin
+4. **Install in Seer**
 
-FontViewer is a file preview plugin for [Seer](https://1218.io) — the original and fastest Quick Look tool for Windows.
+   Copy `fontviewer.dll` into your Seer plugins directory (Seer 4.0.0+). FontViewer writes its settings (`fontviewer.ini`) next to `fontviewer.dll`.
 
-- Supports previewing `.ttf`, `.otf`, `.ttc`, and `.otc` font files
-- Displays full glyph table, metadata, and Unicode coverage
-- Renders sample text with the selected font at configurable sizes
-- Built as a native DLL plugin for Seer 4.0.0+
+## Third-Party Notices & License
 
-Visit [1218.io](https://1218.io) to download Seer and learn more about the plugin ecosystem.
+- Portions of this software use **FreeType** (`2.13.3`) under The FreeType Project License (see [NOTICE](NOTICE)).
+- Built with [Seer SDK](https://github.com/ccseer/Seer-sdk). Visit [1218.io](https://1218.io) to download Seer and explore the plugin ecosystem.
