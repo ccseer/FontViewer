@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <iterator>
 
+#include "bars/opentypefeaturesbar.h"
 #include "fontpreviewedit.h"
 #include "fontui.h"
 #include "waterfallwidget.h"
@@ -232,14 +233,137 @@ private:
     qreal m_dpr = 1.0;
 };
 
-// Keeps the Text tab toolbar on a single row and moves line height and letter
-// spacing into a non-modal Aa panel when the available width would clip them.
+class SliderValueBadge final : public QLabel {
+public:
+    explicit SliderValueBadge(qreal dpr, QWidget *parent = nullptr)
+        : QLabel(parent), m_dpr(fontui::clampDpr(dpr))
+    {
+        setFocusPolicy(Qt::NoFocus);
+        setAlignment(Qt::AlignCenter);
+        QFont f = font();
+        f.setPointSizeF(qMax(8.0, f.pointSizeF() - 1.0));
+        if (const auto tnum = QFont::Tag::fromString("tnum"); tnum.has_value()) {
+            f.setFeature(*tnum, 1);
+        }
+        setFont(f);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        updateMetrics();
+    }
+
+    void setDpr(qreal dpr)
+    {
+        const qreal clamped = fontui::clampDpr(dpr);
+        if (qFuzzyCompare(m_dpr, clamped)) {
+            return;
+        }
+        m_dpr = clamped;
+        updateMetrics();
+        update();
+    }
+
+    void setModified(bool modified)
+    {
+        if (m_modified == modified) {
+            return;
+        }
+        m_modified = modified;
+        QFont f    = font();
+        f.setWeight(modified ? QFont::Medium : QFont::Normal);
+        setFont(f);
+        updateGeometry();
+        update();
+    }
+
+    bool isModified() const
+    {
+        return m_modified;
+    }
+
+    QSize sizeHint() const override
+    {
+        // Measure at Medium weight so toggling modified state never clips
+        // or forces a fixed-size jump.
+        QFont f = font();
+        f.setWeight(QFont::Medium);
+        const QFontMetrics fm(f);
+        const int w = fm.horizontalAdvance(QStringLiteral("-20.0"))
+                      + fontui::dp(10, m_dpr);
+        const int h = fm.height() + fontui::dp(4, m_dpr);
+        return QSize(w, h);
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        return sizeHint();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QPalette &pal  = palette();
+        const bool dark      = fontui::isDarkPalette(pal);
+        const QColor fg_base = pal.color(QPalette::WindowText);
+        const qreal pen_w    = fontui::dpf(1.0, m_dpr);
+        const qreal radius   = fontui::surfaceRadius(m_dpr, false);
+        const QRectF r = QRectF(rect()).adjusted(pen_w * 0.5, pen_w * 0.5,
+                                                 -pen_w * 0.5, -pen_w * 0.5);
+
+        QColor bg;
+        QColor border;
+        QColor fg;
+        if (m_modified) {
+            const QColor accent = fontui::accentColor(pal);
+            bg                  = accent;
+            bg.setAlpha(dark ? 44 : 26);
+            border = accent;
+            border.setAlpha(dark ? 175 : 155);
+            fg = fg_base;
+        }
+        else {
+            bg = fg_base;
+            bg.setAlpha(dark ? 16 : 10);
+            border = fontui::frameBorderColor(pal);
+            fg     = fontui::mutedTextColor(pal);
+        }
+
+        painter.setPen(QPen(border, pen_w));
+        painter.setBrush(bg);
+        if (radius > 0.0) {
+            painter.drawRoundedRect(r, radius, radius);
+        }
+        else {
+            painter.drawRect(r);
+        }
+
+        painter.setPen(fg);
+        painter.setFont(font());
+        painter.drawText(r, Qt::AlignCenter, text());
+    }
+
+private:
+    void updateMetrics()
+    {
+        const QSize sz = sizeHint();
+        setFixedSize(sz);
+    }
+
+    qreal m_dpr     = 1.0;
+    bool m_modified = false;
+};
+
+// Keeps the Text tab toolbar on a single row when wide, moves line height and
+// letter spacing into a non-modal Aa panel when narrow, and wraps secondary
+// controls onto a second row below collapsedWidth() so controls never clip.
 class TextToolbar : public QWidget {
 public:
     TextToolbar(QComboBox *preset,
                 QWidget *line_host,
                 QWidget *space_host,
                 QPushButton *aa_btn,
+                QPushButton *features_btn,
                 QPushButton *invert_btn,
                 QCheckBox *waterfall_chk,
                 QPushButton *reset_btn,
@@ -250,28 +374,26 @@ public:
           m_line_host(line_host),
           m_space_host(space_host),
           m_aa_btn(aa_btn),
+          m_features_btn(features_btn),
           m_invert_btn(invert_btn),
           m_waterfall_chk(waterfall_chk),
           m_reset_btn(reset_btn),
           m_aa_panel(aa_panel)
     {
         setFocusPolicy(Qt::NoFocus);
-        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        QSizePolicy sp(QSizePolicy::Preferred, QSizePolicy::Preferred);
+        sp.setHeightForWidth(true);
+        setSizePolicy(sp);
 
-        m_bar_layout = new QHBoxLayout(this);
-        // Let minimumSizeHint() govern shrinking so the full inline row does
-        // not lock the window width above the collapsed threshold.
-        m_bar_layout->setSizeConstraint(QLayout::SetNoConstraint);
-
-        m_bar_layout->addWidget(m_preset);
-        m_bar_layout->addWidget(m_line_host);
-        m_bar_layout->addWidget(m_space_host);
-        m_bar_layout->addWidget(m_aa_btn);
-        m_bar_layout->addWidget(m_invert_btn);
-        m_bar_layout->addWidget(m_waterfall_chk);
-        m_bar_layout->addStretch(1);
-        if (m_reset_btn) {
-            m_bar_layout->addWidget(m_reset_btn);
+        for (QWidget *w : {static_cast<QWidget *>(m_preset), m_line_host,
+                           m_space_host, static_cast<QWidget *>(m_aa_btn),
+                           static_cast<QWidget *>(m_features_btn),
+                           static_cast<QWidget *>(m_invert_btn),
+                           static_cast<QWidget *>(m_waterfall_chk),
+                           static_cast<QWidget *>(m_reset_btn)}) {
+            if (w) {
+                w->setParent(this);
+            }
         }
 
         m_aa_layout = new QVBoxLayout(m_aa_panel);
@@ -291,44 +413,93 @@ public:
         refreshLayout();
     }
 
+    bool hasHeightForWidth() const override
+    {
+        return true;
+    }
+
+    int heightForWidth(int width) const override
+    {
+        return doLayout(qMax(1, width), true);
+    }
+
     QSize sizeHint() const override
     {
-        return QSize(fullInlineWidth(), rowHeight());
+        const int w = width() > 0 ? width() : fullInlineWidth();
+        return QSize(fullInlineWidth(), heightForWidth(w));
     }
 
     QSize minimumSizeHint() const override
     {
-        return QSize(collapsedWidth(), rowHeight());
+        int max_item_w = 0;
+        for (QWidget *w :
+             {static_cast<QWidget *>(m_preset), static_cast<QWidget *>(m_aa_btn),
+              static_cast<QWidget *>(m_features_btn),
+              static_cast<QWidget *>(m_invert_btn),
+              static_cast<QWidget *>(m_waterfall_chk),
+              static_cast<QWidget *>(m_reset_btn)}) {
+            if (w && (w == m_preset || w == m_aa_btn || w == m_invert_btn
+                      || w == m_waterfall_chk || isWidgetShown(w))) {
+                max_item_w = qMax(max_item_w, w->minimumSizeHint().width());
+            }
+        }
+        return QSize(max_item_w + m_margin_lr * 2, singleRowHeight());
+    }
+
+    void setOnLayoutChanged(std::function<void()> cb)
+    {
+        m_on_layout_changed = std::move(cb);
     }
 
     void refreshLayout()
     {
-        updateMode();
+        const int w = width() > 0 ? width() : fullInlineWidth();
+        updateMode(w);
+        doLayout(w, false);
         updateGeometry();
+        if (m_on_layout_changed) {
+            m_on_layout_changed();
+        }
     }
 
 protected:
     void resizeEvent(QResizeEvent *event) override
     {
         QWidget::resizeEvent(event);
-        updateMode();
+        syncLayoutAndGeometry();
     }
 
     void showEvent(QShowEvent *event) override
     {
         QWidget::showEvent(event);
-        updateMode();
+        syncLayoutAndGeometry();
     }
 
 private:
+    void syncLayoutAndGeometry()
+    {
+        const int w = width() > 0 ? width() : fullInlineWidth();
+        updateMode(w);
+        const int target_h = doLayout(w, false);
+        if (target_h != height()) {
+            updateGeometry();
+        }
+        if (m_on_layout_changed) {
+            m_on_layout_changed();
+        }
+    }
+    static bool isWidgetShown(const QWidget *w)
+    {
+        return w && !w->isHidden();
+    }
+
     void updateMetrics()
     {
-        if (m_bar_layout) {
-            m_bar_layout->setContentsMargins(
-                fontui::dp(8, m_dpr), fontui::dp(6, m_dpr),
-                fontui::dp(8, m_dpr), fontui::dp(4, m_dpr));
-            m_bar_layout->setSpacing(fontui::dp(8, m_dpr));
-        }
+        m_margin_lr   = fontui::dp(8, m_dpr);
+        m_margin_top  = fontui::dp(6, m_dpr);
+        m_margin_bot  = fontui::dp(4, m_dpr);
+        m_h_spacing   = fontui::dp(8, m_dpr);
+        m_v_spacing   = fontui::dp(4, m_dpr);
         if (m_aa_layout) {
             m_aa_layout->setContentsMargins(
                 fontui::dp(10, m_dpr), fontui::dp(8, m_dpr),
@@ -342,53 +513,48 @@ private:
         fontui::fitComboBoxToContents(m_preset, m_dpr);
     }
 
-    int rowHeight() const
+    int singleRowHeight() const
     {
-        const QMargins m = m_bar_layout->contentsMargins();
-        int h            = qMax(m_preset->sizeHint().height(),
-                                m_aa_btn->sizeHint().height());
-        h = qMax(h, m_line_host->sizeHint().height());
-        h = qMax(h, m_space_host->sizeHint().height());
+        int h = qMax(m_preset->sizeHint().height(),
+                     m_aa_btn->sizeHint().height());
+        h     = qMax(h, m_line_host->sizeHint().height());
+        h     = qMax(h, m_space_host->sizeHint().height());
+        if (m_features_btn) {
+            h = qMax(h, m_features_btn->sizeHint().height());
+        }
         h = qMax(h, m_invert_btn->sizeHint().height());
         h = qMax(h, m_waterfall_chk->sizeHint().height());
         if (m_reset_btn) {
             h = qMax(h, m_reset_btn->sizeHint().height());
         }
-        return h + m.top() + m.bottom();
+        return h + m_margin_top + m_margin_bot;
+    }
+
+    int sliderGroupGapExtra() const
+    {
+        return fontui::dp(6, m_dpr);
     }
 
     int fullInlineWidth() const
     {
-        const QMargins m = m_bar_layout->contentsMargins();
-        const int sp     = m_bar_layout->spacing();
-        int w            = m.left() + m.right() + m_preset->sizeHint().width()
+        int w = m_margin_lr * 2 + m_preset->sizeHint().width()
                 + m_line_host->sizeHint().width()
+                + sliderGroupGapExtra()
                 + m_space_host->sizeHint().width()
                 + m_invert_btn->sizeHint().width()
-                + m_waterfall_chk->sizeHint().width() + sp * 4;
-        if (m_reset_btn && !m_reset_btn->isHidden()) {
-            w += m_reset_btn->sizeHint().width() + sp;
+                + m_waterfall_chk->sizeHint().width() + m_h_spacing * 4;
+        if (isWidgetShown(m_features_btn)) {
+            w += m_features_btn->sizeHint().width() + m_h_spacing;
+        }
+        if (isWidgetShown(m_reset_btn)) {
+            w += m_reset_btn->sizeHint().width() + m_h_spacing;
         }
         return w;
     }
 
-    int collapsedWidth() const
+    void updateMode(int avail_w)
     {
-        const QMargins m = m_bar_layout->contentsMargins();
-        const int sp     = m_bar_layout->spacing();
-        int w            = m.left() + m.right() + m_preset->sizeHint().width()
-                + m_aa_btn->sizeHint().width()
-                + m_invert_btn->sizeHint().width()
-                + m_waterfall_chk->sizeHint().width() + sp * 3;
-        if (m_reset_btn && !m_reset_btn->isHidden()) {
-            w += m_reset_btn->sizeHint().width() + sp;
-        }
-        return w;
-    }
-
-    void updateMode()
-    {
-        const bool need_compact = (width() > 0 && width() < fullInlineWidth());
+        const bool need_compact = (avail_w > 0 && avail_w < fullInlineWidth());
         if (m_initialized && m_compact == need_compact) {
             return;
         }
@@ -396,8 +562,6 @@ private:
         m_initialized = true;
 
         if (m_compact) {
-            m_bar_layout->removeWidget(m_line_host);
-            m_bar_layout->removeWidget(m_space_host);
             m_aa_layout->addWidget(m_line_host);
             m_aa_layout->addWidget(m_space_host);
             m_line_host->show();
@@ -407,8 +571,8 @@ private:
         else {
             m_aa_layout->removeWidget(m_line_host);
             m_aa_layout->removeWidget(m_space_host);
-            m_bar_layout->insertWidget(1, m_line_host);
-            m_bar_layout->insertWidget(2, m_space_host);
+            m_line_host->setParent(this);
+            m_space_host->setParent(this);
             m_line_host->show();
             m_space_host->show();
             {
@@ -418,20 +582,108 @@ private:
             m_aa_btn->hide();
             m_aa_panel->hide();
         }
-        m_bar_layout->activate();
+    }
+
+    int doLayout(int avail_w, bool test_only) const
+    {
+        const bool compact = (avail_w > 0 && avail_w < fullInlineWidth());
+        const int left_x   = m_margin_lr;
+        const int right_x  = qMax(left_x, avail_w - m_margin_lr);
+
+        QVector<QWidget *> flow_widgets;
+        flow_widgets.append(m_preset);
+        if (compact) {
+            flow_widgets.append(m_aa_btn);
+        }
+        else {
+            flow_widgets.append(m_line_host);
+            flow_widgets.append(m_space_host);
+        }
+        if (isWidgetShown(m_features_btn)) {
+            flow_widgets.append(m_features_btn);
+        }
+        flow_widgets.append(m_invert_btn);
+        flow_widgets.append(m_waterfall_chk);
+        if (isWidgetShown(m_reset_btn)) {
+            flow_widgets.append(m_reset_btn);
+        }
+
+        struct Placed {
+            QWidget *w = nullptr;
+            int x      = 0;
+            QSize sz;
+        };
+        QVector<Placed> line;
+        int x       = left_x;
+        int y       = m_margin_top;
+        int line_h  = 0;
+
+        auto flush_line = [&](bool is_last_line) {
+            if (line.isEmpty()) {
+                return;
+            }
+            if (!test_only) {
+                if (is_last_line && isWidgetShown(m_reset_btn)
+                    && line.last().w == m_reset_btn) {
+                    const int desired_x
+                        = right_x - line.last().sz.width();
+                    int prev_right = left_x;
+                    if (line.size() >= 2) {
+                        const Placed &prev = line.at(line.size() - 2);
+                        prev_right = prev.x + prev.sz.width() + m_h_spacing;
+                    }
+                    line.last().x = qMax(prev_right, desired_x);
+                }
+                for (const Placed &p : line) {
+                    const int item_y
+                        = y + qMax(0, (line_h - p.sz.height()) / 2);
+                    p.w->setGeometry(QRect(QPoint(p.x, item_y), p.sz));
+                }
+            }
+            line.clear();
+        };
+
+        for (QWidget *w : flow_widgets) {
+            if (!w) {
+                continue;
+            }
+            const QSize sz = w->sizeHint();
+            if (!line.isEmpty() && compact && x + sz.width() > right_x) {
+                flush_line(false);
+                x      = left_x;
+                y      = y + line_h + m_v_spacing;
+                line_h = 0;
+            }
+            line.append({w, x, sz});
+            x += sz.width() + m_h_spacing;
+            if (!compact && w == m_line_host) {
+                x += sliderGroupGapExtra();
+            }
+            line_h = qMax(line_h, sz.height());
+        }
+        flush_line(true);
+
+        const int total_h = y + line_h + m_margin_bot;
+        return qMax(total_h, singleRowHeight());
     }
 
     QComboBox *m_preset        = nullptr;
     QWidget *m_line_host       = nullptr;
     QWidget *m_space_host      = nullptr;
     QPushButton *m_aa_btn      = nullptr;
+    QPushButton *m_features_btn = nullptr;
     QPushButton *m_invert_btn  = nullptr;
     QCheckBox *m_waterfall_chk = nullptr;
     QPushButton *m_reset_btn   = nullptr;
-    QFrame *m_aa_panel         = nullptr;
-    QHBoxLayout *m_bar_layout  = nullptr;
-    QVBoxLayout *m_aa_layout   = nullptr;
-    qreal m_dpr                = 1.0;
+    QFrame *m_aa_panel                  = nullptr;
+    QVBoxLayout *m_aa_layout            = nullptr;
+    std::function<void()> m_on_layout_changed;
+    qreal m_dpr                         = 1.0;
+    int m_margin_lr            = 8;
+    int m_margin_top           = 6;
+    int m_margin_bot           = 4;
+    int m_h_spacing            = 8;
+    int m_v_spacing            = 4;
     bool m_compact             = false;
     bool m_initialized         = false;
 };
@@ -549,9 +801,9 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
     add_preset(tr("Digits & Symbols"), QString::fromUtf8(g_preset_symbols));
     fontui::fitComboBoxToContents(m_combo_preset, m_dpr);
 
-    auto make_slider = [&](const QString &name, const QString &tip, int lo,
-                           int hi, int step, int page, int value,
-                           QSlider **slider_out,
+    auto make_slider = [&](const QString &name, const QString &tip,
+                           const QString &badge_obj_name, int lo, int hi,
+                           int step, int page, int value, QSlider **slider_out,
                            QLabel **value_out) -> QWidget * {
         auto *host = new QWidget(this);
         host->setFocusPolicy(Qt::NoFocus);
@@ -574,12 +826,8 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
         slider->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         slider->setFocusPolicy(Qt::NoFocus);
         slider->setToolTip(tip);
-        auto *value_label = new QLabel(host);
-        value_label->setMinimumWidth(
-            QFontMetrics(value_label->font())
-                .horizontalAdvance(QStringLiteral("-20.0"))
-            + fontui::dp(4, m_dpr));
-        value_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto *value_label = new SliderValueBadge(m_dpr, host);
+        value_label->setObjectName(badge_obj_name);
         lay->addWidget(caption);
         lay->addWidget(slider);
         lay->addWidget(value_label);
@@ -590,20 +838,30 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
 
     // Resolution is 0.1 for the height ratio and 0.5 px for the spacing, so the
     // sliders work on tenths of a point and halves of a pixel respectively.
-    QWidget *line_host = make_slider(tr("Height"), tr("Line height"), 10, 25, 1,
-                                     2, qRound(m_line_height * 10.0),
-                                     &m_slider_line, &m_label_line);
+    QWidget *line_host = make_slider(
+        tr("Height"), tr("Line height"),
+        QStringLiteral("text_line_value_label"), 10, 25, 1, 2,
+        qRound(m_line_height * 10.0), &m_slider_line, &m_label_line);
     m_line_host = line_host;
-    QWidget *space_host
-        = make_slider(tr("Spacing"), tr("Letter spacing (px)"), -10, 40, 1, 2,
-                      qRound(m_letter_spacing * 2.0), &m_slider_space,
-                      &m_label_space);
+    QWidget *space_host = make_slider(
+        tr("Spacing"), tr("Letter spacing (px)"),
+        QStringLiteral("text_space_value_label"), -10, 40, 1, 2,
+        qRound(m_letter_spacing * 2.0), &m_slider_space, &m_label_space);
 
     m_btn_aa = new QPushButton(QStringLiteral("Aa"), this);
     m_btn_aa->setCheckable(true);
     m_btn_aa->setFlat(true);
     m_btn_aa->setFocusPolicy(Qt::NoFocus);
     m_btn_aa->setToolTip(tr("Line height and letter spacing"));
+
+    m_btn_features = new QPushButton(tr("Features"), this);
+    m_btn_features->setObjectName(QStringLiteral("text_features_btn"));
+    m_btn_features->setCheckable(true);
+    m_btn_features->setFlat(true);
+    m_btn_features->setFocusPolicy(Qt::NoFocus);
+    m_btn_features->setCursor(Qt::ArrowCursor);
+    m_btn_features->setToolTip(tr("OpenType features"));
+    m_btn_features->hide();
 
     m_btn_invert = new QPushButton(tr("Invert"), this);
     m_btn_invert->setCheckable(true);
@@ -617,12 +875,22 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
 
     m_btn_reset = new fontui::CompactActionButton(tr("Reset"), m_dpr,
                                                   this, false);
+    m_btn_reset->setObjectName(QStringLiteral("text_toolbar_reset_btn"));
     m_btn_reset->setToolTip(tr("Reset text preview parameters"));
     m_btn_reset->hide();
 
     m_toolbar = new TextToolbar(m_combo_preset, line_host, space_host, m_btn_aa,
-                                m_btn_invert, m_chk_waterfall, m_btn_reset,
-                                m_aa_panel, this);
+                                m_btn_features, m_btn_invert, m_chk_waterfall,
+                                m_btn_reset, m_aa_panel, this);
+    static_cast<TextToolbar *>(m_toolbar)->setOnLayoutChanged([this]() {
+        if (m_aa_panel && m_aa_panel->isVisible()) {
+            repositionAaPanel();
+        }
+    });
+
+    m_features_bar = new OpenTypeFeaturesBar(this);
+    m_features_bar->setDpr(m_dpr);
+    m_features_bar->hide();
 
     m_surface_host = new QWidget(this);
     m_surface_host->setFocusPolicy(Qt::NoFocus);
@@ -639,6 +907,7 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
     m_stack->addWidget(m_edit);
 
     m_scroll_waterfall = new QScrollArea(m_stack);
+    m_scroll_waterfall->setObjectName(QStringLiteral("text_waterfall_scroll"));
     m_scroll_waterfall->setFrameShape(QFrame::NoFrame);
     m_scroll_waterfall->setWidgetResizable(true);
     m_scroll_waterfall->verticalScrollBar()->setProperty("is_readonly", true);
@@ -657,8 +926,9 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
     surface_lay->addWidget(frame);
 
     layout->addWidget(m_toolbar, 0, 0);
-    layout->addWidget(m_surface_host, 1, 0);
-    layout->setRowStretch(1, 1);
+    layout->addWidget(m_features_bar, 1, 0);
+    layout->addWidget(m_surface_host, 2, 0);
+    layout->setRowStretch(2, 1);
 
     updateLayoutMetrics();
 
@@ -711,6 +981,21 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
             m_aa_panel->hide();
         }
     });
+    connect(m_btn_features, &QPushButton::toggled, this, [this](bool on) {
+        emit sigInteractionClearFocus();
+        if (on) {
+            closeAaPanel();
+        }
+        m_features_expanded = on;
+        syncFeaturesDrawerState();
+    });
+    connect(m_features_bar, &OpenTypeFeaturesBar::sigFeaturesChanged, this,
+            [this]() {
+                syncFeaturesDrawerState();
+                emit sigFeaturesChanged();
+            });
+    connect(m_features_bar, &OpenTypeFeaturesBar::sigInteractionClearFocus,
+            this, &TextPreviewTab::sigInteractionClearFocus);
     connect(m_btn_invert, &QPushButton::toggled, this, [this](bool on) {
         m_invert_preview = on;
         applyInvertPreview();
@@ -732,9 +1017,13 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
 
     if (m_label_line) {
         m_label_line->setText(QString::number(m_line_height, 'f', 1));
+        static_cast<SliderValueBadge *>(m_label_line)
+            ->setModified(!qFuzzyCompare(m_line_height, 1.4));
     }
     if (m_label_space) {
         m_label_space->setText(QString::number(m_letter_spacing, 'f', 1));
+        static_cast<SliderValueBadge *>(m_label_space)
+            ->setModified(!qFuzzyIsNull(m_letter_spacing));
     }
 
     // Seed the editor with the first preset so an untouched viewer is not blank.
@@ -792,10 +1081,7 @@ void TextPreviewTab::updateLayoutMetrics()
             slider->setMaximumWidth(track_w + fontui::dp(32, m_dpr));
         }
         if (val_lbl) {
-            val_lbl->setMinimumWidth(
-                QFontMetrics(val_lbl->font())
-                    .horizontalAdvance(QStringLiteral("-20.0"))
-                + fontui::dp(4, m_dpr));
+            static_cast<SliderValueBadge *>(val_lbl)->setDpr(m_dpr);
         }
     };
     rescale_slider_host(m_slider_line, m_label_line);
@@ -803,8 +1089,63 @@ void TextPreviewTab::updateLayoutMetrics()
     if (m_toolbar) {
         static_cast<TextToolbar *>(m_toolbar)->setDpr(m_dpr);
     }
+    if (m_features_bar) {
+        m_features_bar->setDpr(m_dpr);
+    }
     if (m_aa_panel && m_aa_panel->isVisible()) {
         repositionAaPanel();
+    }
+}
+
+void TextPreviewTab::refreshToolbarAndAaPanel()
+{
+    if (m_toolbar) {
+        static_cast<TextToolbar *>(m_toolbar)->refreshLayout();
+        if (m_aa_panel && m_aa_panel->isVisible()) {
+            repositionAaPanel();
+        }
+    }
+}
+
+void TextPreviewTab::syncFeaturesDrawerState()
+{
+    const bool has_feat = m_features_bar && m_features_bar->hasFeatures();
+    const int active_cnt
+        = m_features_bar ? m_features_bar->overrideCount() : 0;
+    if (!has_feat) {
+        m_features_expanded = false;
+    }
+
+    if (m_btn_features) {
+        const QString new_text = active_cnt > 0
+                                     ? tr("Features · %1").arg(active_cnt)
+                                     : tr("Features");
+        const bool text_changed = (m_btn_features->text() != new_text);
+        if (text_changed) {
+            m_btn_features->setText(new_text);
+        }
+        if (m_btn_features->isChecked() != (has_feat && m_features_expanded)) {
+            QSignalBlocker blocker(m_btn_features);
+            m_btn_features->setChecked(has_feat && m_features_expanded);
+        }
+        const QString base = active_cnt > 0
+                                 ? tr("OpenType features (%1 active)").arg(active_cnt)
+                                 : tr("OpenType features");
+        m_btn_features->setToolTip(
+            m_reset_ot_hint.isEmpty()
+                ? base
+                : QStringLiteral("%1 (%2: %3)")
+                      .arg(base, tr("Clear"), m_reset_ot_hint));
+
+        const bool vis_changed = (!m_btn_features->isHidden() != has_feat);
+        m_btn_features->setVisible(has_feat);
+        if (text_changed || vis_changed) {
+            refreshToolbarAndAaPanel();
+        }
+    }
+
+    if (m_features_bar) {
+        m_features_bar->setVisible(has_feat && m_features_expanded);
     }
 }
 
@@ -890,12 +1231,7 @@ void TextPreviewTab::setCustomPresets(const QVector<CustomPreset> &presets)
         }
     }
     fontui::fitComboBoxToContents(m_combo_preset, m_dpr);
-    if (m_toolbar) {
-        static_cast<TextToolbar *>(m_toolbar)->refreshLayout();
-        if (m_aa_panel && m_aa_panel->isVisible()) {
-            repositionAaPanel();
-        }
-    }
+    refreshToolbarAndAaPanel();
 }
 
 void TextPreviewTab::applyFont(const QFont &text_font, int current_pt)
@@ -960,6 +1296,8 @@ void TextPreviewTab::setLineHeight(qreal h)
     }
     if (m_label_line) {
         m_label_line->setText(QString::number(m_line_height, 'f', 1));
+        static_cast<SliderValueBadge *>(m_label_line)
+            ->setModified(!qFuzzyCompare(m_line_height, 1.4));
     }
     if (m_edit) {
         m_edit->setLineHeight(m_line_height);
@@ -979,6 +1317,11 @@ void TextPreviewTab::setLetterSpacing(qreal s)
     }
     if (m_label_space) {
         m_label_space->setText(QString::number(m_letter_spacing, 'f', 1));
+        static_cast<SliderValueBadge *>(m_label_space)
+            ->setModified(!qFuzzyIsNull(m_letter_spacing));
+    }
+    if (m_features_bar) {
+        m_features_bar->setLetterSpacingActive(!qFuzzyIsNull(m_letter_spacing));
     }
     emit sigLetterSpacingChanged(m_letter_spacing);
     updateResetButtonState();
@@ -1088,10 +1431,12 @@ void TextPreviewTab::syncStackIndex()
 }
 
 void TextPreviewTab::updateShortcutTooltips(const QString &invert_hint,
-                                            const QString &waterfall_hint)
+                                            const QString &waterfall_hint,
+                                            const QString &reset_ot_hint)
 {
     m_invert_hint    = invert_hint;
     m_waterfall_hint = waterfall_hint;
+    m_reset_ot_hint  = reset_ot_hint;
     if (m_btn_invert) {
         const QString base = tr("Swap preview foreground and background");
         m_btn_invert->setToolTip(
@@ -1106,6 +1451,57 @@ void TextPreviewTab::updateShortcutTooltips(const QString &invert_hint,
                 ? base
                 : QStringLiteral("%1 (%2)").arg(base, waterfall_hint));
     }
+    if (m_features_bar) {
+        m_features_bar->setResetShortcutHint(reset_ot_hint);
+    }
+    syncFeaturesDrawerState();
+}
+
+void TextPreviewTab::setOpenTypeFeatures(
+    const QVector<FontFeatureInfo> &features)
+{
+    if (!m_features_bar) {
+        return;
+    }
+    m_features_bar->rebuild(features);
+    m_features_bar->setLetterSpacingActive(!qFuzzyIsNull(m_letter_spacing));
+    syncFeaturesDrawerState();
+}
+
+void TextPreviewTab::setFeatureEnabled(const QByteArray &tag, bool enabled)
+{
+    if (m_features_bar) {
+        m_features_bar->setFeatureEnabled(tag, enabled);
+    }
+}
+
+bool TextPreviewTab::isFeatureEnabled(const QByteArray &tag) const
+{
+    return m_features_bar ? m_features_bar->isFeatureEnabled(tag) : false;
+}
+
+void TextPreviewTab::resetOpenTypeFeatures()
+{
+    if (m_features_bar) {
+        m_features_bar->resetOverrides();
+    }
+}
+
+bool TextPreviewTab::hasOpenTypeOverrides() const
+{
+    return m_features_bar && m_features_bar->hasOverrides();
+}
+
+const QHash<QByteArray, bool> &TextPreviewTab::openTypeOverrides() const
+{
+    static const QHash<QByteArray, bool> kEmpty;
+    return m_features_bar ? m_features_bar->overrides() : kEmpty;
+}
+
+QVector<QPushButton *> TextPreviewTab::featurePillButtons() const
+{
+    return m_features_bar ? m_features_bar->pillButtons()
+                          : QVector<QPushButton *>{};
 }
 
 QPixmap TextPreviewTab::renderPixmap(qreal dpr) const
@@ -1173,8 +1569,17 @@ void TextPreviewTab::changeEvent(QEvent *event)
         || event->type() == QEvent::ApplicationPaletteChange) {
         applyInvertPreview();
         updateWaterfall();
+        if (m_features_bar) {
+            m_features_bar->applyPalette();
+        }
         if (m_aa_panel) {
             m_aa_panel->update();
+        }
+        if (m_label_line) {
+            m_label_line->update();
+        }
+        if (m_label_space) {
+            m_label_space->update();
         }
     }
 }
@@ -1251,12 +1656,7 @@ void TextPreviewTab::ensureRecentItem()
     }
     if (inserted) {
         fontui::fitComboBoxToContents(m_combo_preset, m_dpr);
-        if (m_toolbar) {
-            static_cast<TextToolbar *>(m_toolbar)->refreshLayout();
-            if (m_aa_panel && m_aa_panel->isVisible()) {
-                repositionAaPanel();
-            }
-        }
+        refreshToolbarAndAaPanel();
     }
 }
 
@@ -1293,12 +1693,7 @@ void TextPreviewTab::updateResetButtonState()
         return;
     }
     m_btn_reset->setVisible(show);
-    if (m_toolbar) {
-        static_cast<TextToolbar *>(m_toolbar)->refreshLayout();
-        if (m_aa_panel && m_aa_panel->isVisible()) {
-            repositionAaPanel();
-        }
-    }
+    refreshToolbarAndAaPanel();
 }
 
 void TextPreviewTab::resetPreviewSettings()

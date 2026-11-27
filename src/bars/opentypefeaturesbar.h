@@ -8,8 +8,13 @@
 
 #include "engine/fontinspectorengine.h"
 
+namespace fontui {
+class FlowSeparator;
+}
+
 class QLabel;
 class QPushButton;
+class QScrollArea;
 class QHBoxLayout;
 class QVBoxLayout;
 
@@ -30,9 +35,17 @@ public:
     void applyPalette();
     void setResetShortcutHint(const QString &hint);
 
+    bool hasFeatures() const
+    {
+        return !m_controls.isEmpty();
+    }
     bool hasOverrides() const
     {
         return !m_overrides.isEmpty();
+    }
+    int overrideCount() const
+    {
+        return m_overrides.size();
     }
     const QHash<QByteArray, bool> &overrides() const
     {
@@ -45,6 +58,8 @@ public:
 
 protected:
     void changeEvent(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private:
     struct FeaturePillControl {
@@ -55,17 +70,22 @@ private:
         QPushButton *button = nullptr;
     };
 
+    void applyToggleWithMutex(const QByteArray &tag, bool enabled);
     void updatePillsState();
     void updateLayoutMetrics();
+    void updateScrollAreaHeight();
 
     QHash<QByteArray, bool> m_overrides;
     QVector<FeaturePillControl> m_controls;
-    QLabel *m_note               = nullptr;
-    QPushButton *m_reset         = nullptr;
-    QWidget *m_pills_host        = nullptr;
-    QVBoxLayout *m_root_layout   = nullptr;
-    QHBoxLayout *m_header_layout = nullptr;
-    qreal m_dpr                  = 1.0;
+    QVector<fontui::FlowSeparator *> m_separators;
+    QLabel *m_note                  = nullptr;
+    QPushButton *m_reset            = nullptr;
+    QScrollArea *m_scroll_area      = nullptr;
+    QWidget *m_pills_host           = nullptr;
+    QVBoxLayout *m_root_layout      = nullptr;
+    QHBoxLayout *m_body_layout      = nullptr;
+    qreal m_dpr                     = 1.0;
     QString m_reset_hint;
-    bool m_spacing_active = false;
+    bool m_spacing_active           = false;
+    bool m_updating_scroll_height   = false;
 };

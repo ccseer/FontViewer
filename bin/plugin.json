@@ -1,6 +1,6 @@
 {
     "name": "FontViewer",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "type": "dll",
     "roles": [
         "viewer"
@@ -15,5 +15,5 @@
     ],
     "appMinVersion": "4.2.9",
     "author": "corey",
-    "releaseDate": "2026-11-26"
+    "releaseDate": "2026-11-27"
 }

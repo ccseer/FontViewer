@@ -1,7 +1,9 @@
 #pragma once
 
+#include <QByteArray>
 #include <QColor>
 #include <QFont>
+#include <QHash>
 #include <QPixmap>
 #include <QSize>
 #include <QSizeF>
@@ -11,7 +13,10 @@
 
 #include <functional>
 
+#include "engine/fontinspectorengine.h"
+
 class FontPreviewEdit;
+class OpenTypeFeaturesBar;
 class WaterfallWidget;
 class QCheckBox;
 class QComboBox;
@@ -79,7 +84,20 @@ public:
     void updateWaterfall();
     void syncStackIndex();
     void updateShortcutTooltips(const QString &invert_hint,
-                                const QString &waterfall_hint);
+                                const QString &waterfall_hint,
+                                const QString &reset_ot_hint = {});
+
+    void setOpenTypeFeatures(const QVector<FontFeatureInfo> &features);
+    void setFeatureEnabled(const QByteArray &tag, bool enabled);
+    bool isFeatureEnabled(const QByteArray &tag) const;
+    void resetOpenTypeFeatures();
+    bool hasOpenTypeOverrides() const;
+    const QHash<QByteArray, bool> &openTypeOverrides() const;
+    QVector<QPushButton *> featurePillButtons() const;
+    OpenTypeFeaturesBar *featuresBar() const
+    {
+        return m_features_bar;
+    }
 
     QPixmap renderPixmap(qreal dpr) const;
     bool prepareSvgExport(QSize &size_out,
@@ -90,6 +108,7 @@ public:
     Q_SIGNAL void sigSizeClicked(int pt);
     Q_SIGNAL void sigZoomRequested(int steps);
     Q_SIGNAL void sigLetterSpacingChanged(qreal s);
+    Q_SIGNAL void sigFeaturesChanged();
     Q_SIGNAL void sigInteractionClearFocus();
 
 protected:
@@ -111,6 +130,8 @@ private:
     QSizeF prepareEditDocumentSize() const;
     void drawEditDocument(QPainter &painter, const QSizeF &doc_size) const;
     void updateLayoutMetrics();
+    void refreshToolbarAndAaPanel();
+    void syncFeaturesDrawerState();
     bool hasCustomState() const;
     void updateResetButtonState();
     void resetPreviewSettings();
@@ -119,27 +140,30 @@ private:
     int m_current_pt = 16;
     qreal m_dpr      = 1.0;
 
-    FontPreviewEdit *m_edit         = nullptr;
-    WaterfallWidget *m_waterfall    = nullptr;
-    QScrollArea *m_scroll_waterfall = nullptr;
-    QStackedWidget *m_stack         = nullptr;
-    QWidget *m_surface_frame        = nullptr;
-    QWidget *m_surface_host         = nullptr;
-    QComboBox *m_combo_preset       = nullptr;
-    QWidget *m_line_host            = nullptr;
-    QSlider *m_slider_line          = nullptr;
-    QSlider *m_slider_space         = nullptr;
-    QLabel *m_label_line            = nullptr;
-    QLabel *m_label_space           = nullptr;
-    QPushButton *m_btn_invert       = nullptr;
-    QPushButton *m_btn_aa           = nullptr;
-    QPushButton *m_btn_reset        = nullptr;
-    QFrame *m_aa_panel              = nullptr;
-    QWidget *m_toolbar              = nullptr;
-    QCheckBox *m_chk_waterfall      = nullptr;
+    FontPreviewEdit *m_edit             = nullptr;
+    WaterfallWidget *m_waterfall        = nullptr;
+    QScrollArea *m_scroll_waterfall     = nullptr;
+    QStackedWidget *m_stack             = nullptr;
+    QWidget *m_surface_frame            = nullptr;
+    QWidget *m_surface_host             = nullptr;
+    QComboBox *m_combo_preset           = nullptr;
+    QWidget *m_line_host                = nullptr;
+    QSlider *m_slider_line              = nullptr;
+    QSlider *m_slider_space             = nullptr;
+    QLabel *m_label_line                = nullptr;
+    QLabel *m_label_space               = nullptr;
+    QPushButton *m_btn_invert           = nullptr;
+    QPushButton *m_btn_aa               = nullptr;
+    QPushButton *m_btn_features         = nullptr;
+    QPushButton *m_btn_reset            = nullptr;
+    QFrame *m_aa_panel                  = nullptr;
+    QWidget *m_toolbar                  = nullptr;
+    OpenTypeFeaturesBar *m_features_bar = nullptr;
+    QCheckBox *m_chk_waterfall          = nullptr;
 
     bool m_waterfall_enabled      = false;
     bool m_invert_preview         = false;
+    bool m_features_expanded      = false;
     bool m_recent_present         = false;
     bool m_ensure_pending         = false;
     bool m_waterfall_needs_scroll = false;
@@ -148,4 +172,5 @@ private:
     QString m_last_edited;
     QString m_invert_hint;
     QString m_waterfall_hint;
+    QString m_reset_ot_hint;
 };

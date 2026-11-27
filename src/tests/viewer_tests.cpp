@@ -52,8 +52,10 @@
 #include "bars/variableaxesbar.h"
 #include "engine/fontinspectorengine.h"
 #include "fontshortcuts.h"
+#include "fontui.h"
 #include "fontviewer.h"
 #include "fontwidget.h"
+#include "gitversion.h"
 #include "tabs/characterwidget.h"
 #include "tabs/fontpreviewedit.h"
 #include "tabs/glyphinspectorwidget.h"
@@ -259,6 +261,13 @@ private slots:
     void customPresetDoesNotWidenDropdownOrSplitSurrogateTitle();
     void waterfallScrollsToNewlyInsertedLargeCustomSizeWhileVisible();
     void customShortcutCannotBreakFixedZoomShortcuts();
+    void glyphGuidePillsToggleCanvasAndNarrowViewport();
+    void glyphGuideHideAllShowAllStateMachine();
+    void glyphGuideIniPersistenceAndLosslessPreservation();
+    void openTypeDrawerSampleIsolationAndFlowSeparators();
+    void openTypeMutexGroupsAndSingleSignal();
+    void flowLayoutWrapsNextGroupWhenSeparatorOverflowsBoundary();
+    void sliderBadgesStayCloserToOwnSliderAndDrawerUsesClear();
 };
 
 void ViewerTest::escReleaseRunsAfterTheEventLoop()
@@ -964,11 +973,54 @@ void ViewerTest::narrowToolbarMovesMetricsToNonModalAaPanel()
     line_slider->setValue(20);
     QVERIFY(qFuzzyCompare(view.getLineHeight(), 2.0));
 
+    // Resizing narrow enough for Aa to wrap to row 2 must reposition Aa panel
+    // after the toolbar relayouts rather than leaving it at stale Y.
+    view.resize(210, 500);
+    QApplication::processEvents();
+    QVERIFY(aa_btn->isVisible());
+    QVERIFY(aa_panel->isVisible());
+    const int aa_bottom_in_tab
+        = aa_btn->mapTo(aa_panel->parentWidget(), QPoint(0, aa_btn->height())).y();
+    QVERIFY(aa_panel->geometry().top() >= aa_bottom_in_tab);
+
     view.resize(850, 600);
     QApplication::processEvents();
     QVERIFY(!aa_btn->isVisible());
     QVERIFY(!aa_panel->isVisible());
     QVERIFY(!aa_panel->isAncestorOf(line_slider));
+
+    // Also verify 384px narrow toolbar with Features button visible does not clip.
+    const QString vf_path = fixturePath("Roboto-VariableFont_wdth,wght.ttf");
+    if (!vf_path.isEmpty()) {
+        FontWidget vf_view;
+        QVERIFY(vf_view.init(vf_path));
+        vf_view.resize(384, 520);
+        vf_view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&vf_view));
+        QApplication::processEvents();
+        auto *feat_btn = vf_view.findChild<QPushButton *>(
+            QStringLiteral("text_features_btn"));
+        QVERIFY(feat_btn != nullptr);
+        QVERIFY(feat_btn->isVisible());
+        QWidget *vf_tb = feat_btn->parentWidget();
+        QVERIFY(vf_tb != nullptr);
+        vf_view.setFeatureEnabled(QByteArrayLiteral("smcp"), true);
+        vf_view.setInvertPreview(true);
+        QApplication::processEvents();
+        const int narrow_tb_h = vf_tb->height();
+        for (QWidget *w : vf_tb->findChildren<QWidget *>(
+                 QString(), Qt::FindDirectChildrenOnly)) {
+            if (w->isVisible()) {
+                QVERIFY(w->geometry().right() < vf_tb->width());
+                QVERIFY(w->geometry().left() >= 0);
+                QVERIFY(w->geometry().bottom() < vf_tb->height());
+            }
+        }
+        // Widening back from wrapped narrow mode must recover single-row height.
+        vf_view.resize(850, 520);
+        QApplication::processEvents();
+        QVERIFY(vf_tb->height() < narrow_tb_h);
+    }
 }
 
 void ViewerTest::deferredShowScrollsWaterfallToCurrentSize()
@@ -1383,8 +1435,20 @@ void ViewerTest::inspectorEngineResolvesTtcAndLoadFileInfoLatches()
     TestFontViewer viewer(ini_path);
     viewer.load(nullptr, &opts);
     QSignalSpy spy(&viewer, &ViewerBase::sigCommand);
+    static QStringList captured_font_info_logs;
+    captured_font_info_logs.clear();
+    const QtMessageHandler prev_handler = qInstallMessageHandler(
+        [](QtMsgType type, const QMessageLogContext &ctx, const QString &msg) {
+            Q_UNUSED(type);
+            Q_UNUSED(ctx);
+            if (msg.contains(QStringLiteral("font info:"))) {
+                captured_font_info_logs.append(msg);
+            }
+        });
     viewer.loadFileInfo();
     viewer.loadFileInfo();
+    qInstallMessageHandler(prev_handler);
+    QVERIFY(captured_font_info_logs.isEmpty());
     int append_count = 0;
     for (const auto &call : spy) {
         if (call.at(0).toInt() == int(VCT_AppendProperty)) {
@@ -1664,6 +1728,8 @@ void ViewerTest::glyphInspectorBandsNoOverlapAndNoHorizontalScroll()
     }
     auto *preview = gi->findChild<GlyphPreviewWidget *>();
     QVERIFY(preview != nullptr);
+    sa.ensureWidgetVisible(preview);
+    QApplication::processEvents();
     QVERIFY(preview->isVisible());
     preview->repaint();
     QApplication::processEvents();
@@ -2180,8 +2246,8 @@ void ViewerTest::openTypeFeatureParserGroupsPriorityAndParams()
     QVERIFY(!tags.contains(QStringLiteral("locl")));
     QCOMPARE(tags.count(QStringLiteral("liga")), 1);
     QCOMPARE(tags,
-             (QStringList{"liga", "kern", "smcp", "ss01", "ss02", "ss03",
-                          "cv01", "ccmp", "clig", "salt"}));
+             (QStringList{"liga", "clig", "kern", "smcp", "ss01", "ss02",
+                          "ss03", "cv01", "ccmp", "salt"}));
 
     QVERIFY(by_tag["liga"].default_on);
     QVERIFY(by_tag["clig"].default_on);
@@ -2229,6 +2295,18 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         QVERIFY(QTest::qWaitForWindowExposed(&viewer));
         auto *view = viewer.findChild<FontWidget *>();
         QVERIFY(view != nullptr);
+        auto *text_tab = view->findChild<TextPreviewTab *>();
+        auto *feat_bar = view->findChild<OpenTypeFeaturesBar *>();
+        auto *feat_btn = view->findChild<QPushButton *>(
+            QStringLiteral("text_features_btn"));
+        QVERIFY(text_tab != nullptr && feat_bar != nullptr && feat_btn != nullptr);
+        QCOMPARE(feat_bar->parentWidget(), static_cast<QWidget *>(text_tab));
+        QVERIFY(feat_btn->isVisible());
+        QVERIFY(!feat_bar->isVisible());
+        feat_btn->click();
+        QApplication::processEvents();
+        QVERIFY(feat_bar->isVisible());
+
         const auto pills = view->featurePillButtons();
         QVERIFY(!pills.isEmpty());
 
@@ -2337,15 +2415,8 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         }
 
         // Clicking a pill or OpenType Reset must clear FontPreviewEdit focus.
-        auto *feat_bar = view->findChild<OpenTypeFeaturesBar *>();
-        QVERIFY(feat_bar != nullptr);
-        QPushButton *reset_btn = nullptr;
-        for (QPushButton *b : feat_bar->findChildren<QPushButton *>()) {
-            if (b->text() == QStringLiteral("Reset")) {
-                reset_btn = b;
-                break;
-            }
-        }
+        QPushButton *reset_btn = feat_bar->findChild<QPushButton *>(
+            QStringLiteral("opentype_reset_btn"));
         QVERIFY(reset_btn != nullptr);
         QVERIFY(reset_btn->isVisible());
         edit->setFocus(Qt::MouseFocusReason);
@@ -2377,17 +2448,25 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         QApplication::processEvents();
         QCOMPARE(view->isFeatureEnabled(toggle_tag), initial_on);
 
-        // Note label palette follows runtime theme/palette Mid color changes.
+        // Note label stays empty unless letter spacing disables ligatures, and
+        // its palette follows runtime theme/palette Mid color changes.
         QLabel *note_lbl = nullptr;
-        for (QLabel *lbl : view->findChildren<QLabel *>()) {
-            if (lbl->text().startsWith(QStringLiteral("Text preview only"))) {
+        for (QLabel *lbl : feat_bar->findChildren<QLabel *>()) {
+            if (lbl->wordWrap()) {
                 note_lbl = lbl;
                 break;
             }
         }
         QVERIFY(note_lbl != nullptr);
-        // A non-wrapped hint would force the whole viewer layout wider.
-        QVERIFY(note_lbl->wordWrap());
+        QVERIFY(note_lbl->text().isEmpty());
+        view->setLetterSpacing(2.0);
+        QApplication::processEvents();
+        QVERIFY(note_lbl->text().contains(QStringLiteral("letter spacing"),
+                                          Qt::CaseInsensitive));
+        view->setLetterSpacing(0.0);
+        QApplication::processEvents();
+        QVERIFY(note_lbl->text().isEmpty());
+
         QPalette themed = makeThemePalette(true);
         const QColor custom_mid(0x88, 0x99, 0xAA);
         themed.setColor(QPalette::All, QPalette::Mid, custom_mid);
@@ -2401,7 +2480,8 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
     }
 
     // Many-feature fonts (Noto Sans VF has 40+ features) must stay focus-free,
-    // render all pills without an internal scrollbar, and keep tabs usable.
+    // cap the expanded drawer scroll area at 156*dpr with read-only NoFocus
+    // scrollbars, and keep tabs usable.
     {
         const QString noto_vf = fixturePath("NotoSans-VariableFont_wdth,wght.ttf");
         QVERIFY(!noto_vf.isEmpty());
@@ -2411,6 +2491,13 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         noto_view.show();
         QVERIFY(QTest::qWaitForWindowExposed(&noto_view));
         QApplication::processEvents();
+
+        auto *noto_feat_btn = noto_view.findChild<QPushButton *>(
+            QStringLiteral("text_features_btn"));
+        QVERIFY(noto_feat_btn != nullptr);
+        noto_feat_btn->click();
+        QApplication::processEvents();
+
         const auto pills = noto_view.featurePillButtons();
         QVERIFY(pills.size() >= 30);
         auto *noto_tabs = noto_view.findChild<QTabWidget *>();
@@ -2418,11 +2505,15 @@ void ViewerTest::openTypePillsIsolationSpacingResetAndNonPersistence()
         QVERIFY(noto_tabs->height() >= 250);
         auto *feat_bar = noto_view.findChild<OpenTypeFeaturesBar *>();
         QVERIFY(feat_bar != nullptr);
-        QVERIFY(feat_bar->findChildren<QScrollArea *>().isEmpty());
-        for (QPushButton *pill : pills) {
-            QVERIFY(pill->isVisible());
-            QVERIFY(!pill->visibleRegion().isEmpty());
-        }
+        auto *feat_scroll = feat_bar->findChild<QScrollArea *>(
+            QStringLiteral("opentype_features_scroll"));
+        QVERIFY(feat_scroll != nullptr);
+        QVERIFY(feat_scroll->height() <= 156);
+        QVERIFY(feat_scroll->verticalScrollBar()
+                    ->property("is_readonly")
+                    .toBool());
+        QCOMPARE(feat_scroll->verticalScrollBar()->focusPolicy(), Qt::NoFocus);
+        QVERIFY(feat_scroll->verticalScrollBar()->maximum() > 0);
         for (QWidget *child : noto_view.findChildren<QWidget *>()) {
             if (qobject_cast<FontPreviewEdit *>(child)
                 || child->window() != noto_view.window()) {
@@ -2607,16 +2698,12 @@ void ViewerTest::glyphInspectorShowOutlinePointsUiAndIniPersistence()
         auto *gi = view->findChild<GlyphInspectorWidget *>();
         QVERIFY(gi != nullptr);
 
-        QCheckBox *chk = nullptr;
-        for (QCheckBox *c : gi->findChildren<QCheckBox *>()) {
-            if (c->text() == QLatin1String("Show Outline Points")) {
-                chk = c;
-                break;
-            }
-        }
-        QVERIFY(chk != nullptr);
-        QCOMPARE(chk->focusPolicy(), Qt::NoFocus);
-        QVERIFY(!chk->isChecked());
+        auto *outline_btn = gi->findChild<QPushButton *>(
+            QStringLiteral("guide_pill_outline"));
+        QVERIFY(outline_btn != nullptr);
+        QCOMPARE(outline_btn->text(), QStringLiteral("Outline"));
+        QCOMPARE(outline_btn->focusPolicy(), Qt::NoFocus);
+        QVERIFY(!outline_btn->isChecked());
 
         FontInspectorEngine engine;
         QVERIFY(engine.openFile(font_path));
@@ -2639,7 +2726,7 @@ void ViewerTest::glyphInspectorShowOutlinePointsUiAndIniPersistence()
         QVERIFY(saw_contours);
         QVERIFY(saw_points);
 
-        chk->setChecked(true);
+        outline_btn->setChecked(true);
         QVERIFY(view->isShowOutlinePoints());
 
         // Outline points still render via QRawFont::unitsPerEm fallback when
@@ -3564,15 +3651,19 @@ void ViewerTest::uiUsesDefaultCursorNoCjkPresetAndGroupsTypography()
                    QStringLiteral("Digits & Symbols"))
                    + 36);
 
-    // Variable axes and OpenType features share the Typography group box,
-    // which collapses cleanly with the top header section.
-    auto *axes = view.findChild<VariableAxesBar *>();
-    auto *feat = view.findChild<OpenTypeFeaturesBar *>();
+    // Variable axes live in the Typography group box (which collapses cleanly
+    // with the top header section), while OpenType features live inside the
+    // Text preview tab drawer (collapsed by default).
+    auto *axes     = view.findChild<VariableAxesBar *>();
+    auto *feat     = view.findChild<OpenTypeFeaturesBar *>();
+    auto *text_tab = view.findChild<TextPreviewTab *>();
     QVERIFY(axes != nullptr);
     QVERIFY(feat != nullptr);
+    QVERIFY(text_tab != nullptr);
     auto *group = qobject_cast<QGroupBox *>(axes->parentWidget());
     QVERIFY(group != nullptr);
-    QCOMPARE(feat->parentWidget(), static_cast<QWidget *>(group));
+    QCOMPARE(feat->parentWidget(), static_cast<QWidget *>(text_tab));
+    QVERIFY(!feat->isVisible());
     QCOMPARE(group->title(), QStringLiteral("Typography"));
     QVERIFY(group->isVisible());
 
@@ -3606,10 +3697,9 @@ void ViewerTest::uiUsesDefaultCursorNoCjkPresetAndGroupsTypography()
 
     // Text toolbar Reset restores preview parameters while keeping text and
     // preset, without changing toolbar height.
-    auto *text_tab = view.findChild<TextPreviewTab *>();
-    QVERIFY(text_tab != nullptr);
-    auto *edit_box       = text_tab->findChild<FontPreviewEdit *>();
-    auto *waterfall_area = text_tab->findChild<QScrollArea *>();
+    auto *edit_box = text_tab->findChild<FontPreviewEdit *>();
+    auto *waterfall_area = text_tab->findChild<QScrollArea *>(
+        QStringLiteral("text_waterfall_scroll"));
     QVERIFY(edit_box != nullptr && waterfall_area != nullptr);
     QVERIFY(edit_box->verticalScrollBar()->property("is_readonly").toBool());
     QVERIFY(edit_box->horizontalScrollBar()->property("is_readonly").toBool());
@@ -3619,13 +3709,8 @@ void ViewerTest::uiUsesDefaultCursorNoCjkPresetAndGroupsTypography()
     QVERIFY(waterfall_area->horizontalScrollBar()
                 ->property("is_readonly")
                 .toBool());
-    QPushButton *reset_text_btn = nullptr;
-    for (QPushButton *b : text_tab->findChildren<QPushButton *>()) {
-        if (b->text() == QLatin1String("Reset")) {
-            reset_text_btn = b;
-            break;
-        }
-    }
+    QPushButton *reset_text_btn = text_tab->findChild<QPushButton *>(
+        QStringLiteral("text_toolbar_reset_btn"));
     QVERIFY(reset_text_btn != nullptr);
     QVERIFY(!reset_text_btn->isVisible());
 
@@ -3689,6 +3774,12 @@ void ViewerTest::featurePillsLightModeContrastAndCheckedIndicator()
     view.resize(850, 800);
     view.show();
     QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    auto *feat_btn = view.findChild<QPushButton *>(
+        QStringLiteral("text_features_btn"));
+    QVERIFY(feat_btn != nullptr);
+    feat_btn->click();
     QApplication::processEvents();
 
     QPushButton *pill = nullptr;
@@ -3995,13 +4086,12 @@ void ViewerTest::toolbarReflowsWhenResetTogglesAndAvoidsDanglingPresetSeparator(
     QVERIFY(text_tab != nullptr);
 
     QPushButton *aa_btn = nullptr;
-    QPushButton *reset_btn = nullptr;
+    QPushButton *reset_btn = text_tab->findChild<QPushButton *>(
+        QStringLiteral("text_toolbar_reset_btn"));
     for (QPushButton *btn : text_tab->findChildren<QPushButton *>()) {
         if (btn->text() == QLatin1String("Aa")) {
             aa_btn = btn;
-        }
-        else if (btn->text() == QLatin1String("Reset")) {
-            reset_btn = btn;
+            break;
         }
     }
     QVERIFY(aa_btn != nullptr && reset_btn != nullptr);
@@ -4272,15 +4362,15 @@ void ViewerTest::paletteChangeUpdatesToolbarIconsSeparatorAndEmptyLabel()
     QVERIFY(empty_lbl != nullptr);
     const QColor light_lbl_color = empty_lbl->palette().color(QPalette::WindowText);
 
-    QFrame *typo_sep = nullptr;
-    for (QFrame *f : view.findChildren<QFrame *>()) {
-        if (f->frameShape() == QFrame::HLine) {
-            typo_sep = f;
+    QWidget *sep_widget = nullptr;
+    for (QWidget *w : view.findChildren<QWidget *>()) {
+        if (w->property("flow_separator").toBool()) {
+            sep_widget = w;
             break;
         }
     }
-    QVERIFY(typo_sep != nullptr);
-    const QColor light_sep_color = typo_sep->palette().color(QPalette::WindowText);
+    QVERIFY(sep_widget != nullptr);
+    const QColor light_sep_color = sep_widget->palette().color(QPalette::WindowText);
 
     // Switch only the widget palette to dark without calling updateTheme(1)
     // explicitly: PaletteChange must update baked icons and custom-palette labels.
@@ -4294,7 +4384,7 @@ void ViewerTest::paletteChangeUpdatesToolbarIconsSeparatorAndEmptyLabel()
     QVERIFY(empty_lbl->palette().color(QPalette::WindowText) != light_lbl_color);
     QCOMPARE(empty_lbl->palette().color(QPalette::WindowText),
              QColor(0x88, 0x99, 0xAA));
-    QVERIFY(typo_sep->palette().color(QPalette::WindowText) != light_sep_color);
+    QVERIFY(sep_widget->palette().color(QPalette::WindowText) != light_sep_color);
 }
 
 void ViewerTest::customPresetDoesNotWidenDropdownOrSplitSurrogateTitle()
@@ -4441,6 +4531,590 @@ void ViewerTest::customShortcutCannotBreakFixedZoomShortcuts()
     QVERIFY(fw->getCurrentFontSize() > before_pt);
     QTest::keyClick(&viewer, Qt::Key_Minus, Qt::ControlModifier);
     QCOMPARE(fw->getCurrentFontSize(), before_pt);
+}
+
+void ViewerTest::glyphGuidePillsToggleCanvasAndNarrowViewport()
+{
+    const QString font_path = fixtureFont();
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(font_path));
+    const FontDecorationMetrics deco = engine.decorationMetrics(0);
+    QVERIFY(deco.has_underline && deco.has_strikeout);
+
+    QScrollArea sa;
+    sa.setWidgetResizable(true);
+    sa.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    auto *gi = new GlyphInspectorWidget(&sa);
+    sa.setWidget(gi);
+    sa.resize(320, 560);
+    sa.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&sa));
+
+    QFont ft(QStringLiteral("Roboto"));
+    ft.setPointSize(16);
+    gi->updateGlyph(QChar('A'), ft, font_path, deco);
+    QApplication::processEvents();
+    QApplication::processEvents();
+    QCOMPARE(sa.horizontalScrollBar()->maximum(), 0);
+
+    auto *preview = gi->previewWidget();
+    QVERIFY(preview != nullptr);
+    sa.ensureWidgetVisible(preview);
+    QApplication::processEvents();
+    preview->repaint();
+
+    const QStringList initial_labels = preview->lastLabelTexts();
+    QVERIFY(initial_labels.contains(QStringLiteral("baseline")));
+    QVERIFY(initial_labels.contains(QStringLiteral("ascent")));
+    QVERIFY(initial_labels.contains(QStringLiteral("descent")));
+    QVERIFY(initial_labels.contains(QStringLiteral("origin")));
+    QVERIFY(initial_labels.contains(QStringLiteral("advance")));
+    QVERIFY(!preview->lastUnderlineBand().isEmpty());
+    QVERIFY(!preview->lastStrikeoutBand().isEmpty());
+
+    auto find_pill = [gi](const QString &key) -> QPushButton * {
+        return gi->findChild<QPushButton *>(
+            QStringLiteral("guide_pill_%1").arg(key));
+    };
+
+    // Advance hides both origin and advance labels.
+    QPushButton *adv_pill = find_pill(QStringLiteral("advance"));
+    QVERIFY(adv_pill != nullptr);
+    adv_pill->click();
+    preview->repaint();
+    QVERIFY(!preview->isGuideVisible(GlyphGuideId::Advance));
+    QVERIFY(!preview->lastLabelTexts().contains(QStringLiteral("origin")));
+    QVERIFY(!preview->lastLabelTexts().contains(QStringLiteral("advance")));
+    adv_pill->click();
+    preview->repaint();
+    QVERIFY(preview->isGuideVisible(GlyphGuideId::Advance));
+    QVERIFY(preview->lastLabelTexts().contains(QStringLiteral("origin")));
+    QVERIFY(preview->lastLabelTexts().contains(QStringLiteral("advance")));
+
+    // Underline & Strikeout hide their bands and labels.
+    QPushButton *ul_pill = find_pill(QStringLiteral("underline"));
+    QPushButton *st_pill = find_pill(QStringLiteral("strikeout"));
+    QVERIFY(ul_pill != nullptr && st_pill != nullptr);
+    ul_pill->click();
+    st_pill->click();
+    preview->repaint();
+    QVERIFY(preview->lastUnderlineBand().isEmpty());
+    QVERIFY(preview->lastStrikeoutBand().isEmpty());
+    for (const QString &lbl : preview->lastLabelTexts()) {
+        QVERIFY(!lbl.startsWith(QLatin1String("underline")));
+        QVERIFY(!lbl.startsWith(QLatin1String("strikeout")));
+    }
+    ul_pill->click();
+    st_pill->click();
+    preview->repaint();
+    QVERIFY(!preview->lastUnderlineBand().isEmpty());
+    QVERIFY(!preview->lastStrikeoutBand().isEmpty());
+
+    // Bearings hides LSB/RSB when present.
+    QPushButton *bear_pill = find_pill(QStringLiteral("bearings"));
+    QVERIFY(bear_pill != nullptr);
+    bear_pill->click();
+    preview->repaint();
+    QVERIFY(!preview->lastLabelTexts().contains(QStringLiteral("LSB")));
+    QVERIFY(!preview->lastLabelTexts().contains(QStringLiteral("RSB")));
+    bear_pill->click();
+
+    // Label-less guides (bbox, center) update preview visibility state.
+    QPushButton *bbox_pill   = find_pill(QStringLiteral("bbox"));
+    QPushButton *center_pill = find_pill(QStringLiteral("center"));
+    QVERIFY(bbox_pill != nullptr && center_pill != nullptr);
+    bbox_pill->click();
+    center_pill->click();
+    QVERIFY(!preview->isGuideVisible(GlyphGuideId::BBox));
+    QVERIFY(!preview->isGuideVisible(GlyphGuideId::Center));
+
+    // clearSelection() / preview->clear() must preserve hidden guide state.
+    gi->clearSelection();
+    QVERIFY(!preview->isGuideVisible(GlyphGuideId::BBox));
+    QVERIFY(!preview->isGuideVisible(GlyphGuideId::Center));
+
+    // Widening from narrow viewport must shrink multi-row guide bar height.
+    gi->updateGlyph(QChar('A'), ft, font_path, deco);
+    QApplication::processEvents();
+    auto *toggle_all = gi->findChild<QPushButton *>(
+        QStringLiteral("guide_toggle_all_btn"));
+    QVERIFY(toggle_all != nullptr && toggle_all->parentWidget() != nullptr);
+    const int narrow_bar_h = toggle_all->parentWidget()->height();
+    sa.resize(850, 560);
+    QApplication::processEvents();
+    QVERIFY(toggle_all->parentWidget()->height() < narrow_bar_h);
+}
+
+void ViewerTest::glyphGuideHideAllShowAllStateMachine()
+{
+    const QString font_path = fixtureFont();
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    FontInspectorEngine engine;
+    QVERIFY(engine.openFile(font_path));
+    const FontDecorationMetrics full_deco = engine.decorationMetrics(0);
+
+    GlyphInspectorWidget gi;
+    QFont ft(QStringLiteral("Roboto"));
+    ft.setPointSize(16);
+    gi.updateGlyph(QChar('A'), ft, font_path, full_deco);
+
+    auto *toggle_all = gi.findChild<QPushButton *>(
+        QStringLiteral("guide_toggle_all_btn"));
+    auto *outline_btn = gi.findChild<QPushButton *>(
+        QStringLiteral("guide_pill_outline"));
+    auto *baseline_pill = gi.findChild<QPushButton *>(
+        QStringLiteral("guide_pill_baseline"));
+    QVERIFY(toggle_all != nullptr && outline_btn != nullptr
+            && baseline_pill != nullptr);
+
+    QCOMPARE(toggle_all->text(), QStringLiteral("Hide All"));
+    QVERIFY(!gi.isShowOutlinePoints());
+
+    // Hide All hides every visible guide without altering Outline.
+    toggle_all->click();
+    QCOMPARE(toggle_all->text(), QStringLiteral("Show All"));
+    QVERIFY(!gi.isShowOutlinePoints());
+    for (QPushButton *pill : gi.guidePillButtons()) {
+        if (!pill->isHidden()) {
+            QVERIFY(!pill->isChecked());
+        }
+    }
+
+    // Re-enabling one guide keeps button as Show All until all are enabled.
+    baseline_pill->click();
+    QVERIFY(baseline_pill->isChecked());
+    QCOMPARE(toggle_all->text(), QStringLiteral("Show All"));
+
+    toggle_all->click();
+    QCOMPARE(toggle_all->text(), QStringLiteral("Hide All"));
+    for (QPushButton *pill : gi.guidePillButtons()) {
+        if (!pill->isHidden()) {
+            QVERIFY(pill->isChecked());
+        }
+    }
+
+    // Hidden unavailable guides (underline when deco lacks underline) are
+    // preserved across Hide All / Show All cycles.
+    gi.setHiddenGuideIds({QStringLiteral("underline")});
+    FontDecorationMetrics no_ul_deco = full_deco;
+    no_ul_deco.has_underline         = false;
+    gi.updateGlyph(QChar('A'), ft, font_path, no_ul_deco);
+    auto *ul_pill = gi.findChild<QPushButton *>(
+        QStringLiteral("guide_pill_underline"));
+    QVERIFY(ul_pill != nullptr);
+    QVERIFY(ul_pill->isHidden());
+    // Visible guides are all ON -> button says Hide All.
+    QCOMPARE(toggle_all->text(), QStringLiteral("Hide All"));
+    toggle_all->click();
+    QCOMPARE(toggle_all->text(), QStringLiteral("Show All"));
+    toggle_all->click();
+    QCOMPARE(toggle_all->text(), QStringLiteral("Hide All"));
+    QVERIFY(gi.hiddenGuideIds().contains(QStringLiteral("underline")));
+}
+
+void ViewerTest::glyphGuideIniPersistenceAndLosslessPreservation()
+{
+    const QString font_path = fixtureFont();
+    if (font_path.isEmpty()) {
+        QSKIP("set FONTVIEWER_TEST_FONT to a font file to run viewer tests");
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString ini_path = dir.filePath(QStringLiteral("fontviewer.ini"));
+
+    // Seed quoted comma list + unknown token + mixed case/whitespace.
+    {
+        QSettings seed(ini_path, QSettings::IniFormat);
+        seed.setValue(QStringLiteral("hidden_guides"),
+                      QStringLiteral(" CENTER , bogus_id , underline "));
+        seed.sync();
+    }
+
+    // Open without ever selecting a glyph in Glyph Inspector, then close:
+    // unavailable/unselected hidden items must survive losslessly.
+    {
+        ViewOptionsPrivate d;
+        d.path = font_path;
+        ViewOptions opts;
+        opts.d_ptr = &d;
+
+        TestFontViewer viewer(ini_path);
+        viewer.load(nullptr, &opts);
+        auto *fw = viewer.findChild<FontWidget *>();
+        QVERIFY(fw != nullptr);
+        const QStringList loaded = fw->hiddenGuideIds();
+        QVERIFY(loaded.contains(QStringLiteral("underline")));
+        QVERIFY(loaded.contains(QStringLiteral("center")));
+        QVERIFY(!loaded.contains(QStringLiteral("bogus_id")));
+    }
+
+    {
+        QSettings check(ini_path, QSettings::IniFormat);
+        const QStringList raw = check.value(QStringLiteral("hidden_guides"))
+                                    .toStringList();
+        QVERIFY(raw.contains(QStringLiteral("underline")));
+        QVERIFY(raw.contains(QStringLiteral("center")));
+    }
+
+    // Clearing all hidden guides removes the key (never writes @Invalid()).
+    {
+        ViewOptionsPrivate d;
+        d.path = font_path;
+        ViewOptions opts;
+        opts.d_ptr = &d;
+
+        TestFontViewer viewer(ini_path);
+        viewer.load(nullptr, &opts);
+        auto *fw = viewer.findChild<FontWidget *>();
+        QVERIFY(fw != nullptr);
+        fw->setHiddenGuideIds({});
+    }
+
+    {
+        QSettings check(ini_path, QSettings::IniFormat);
+        QVERIFY(!check.contains(QStringLiteral("hidden_guides")));
+        QFile f(ini_path);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QVERIFY(!f.readAll().contains("@Invalid()"));
+    }
+}
+
+void ViewerTest::openTypeDrawerSampleIsolationAndFlowSeparators()
+{
+    const QString noto_vf = fixturePath("NotoSans-VariableFont_wdth,wght.ttf");
+    if (noto_vf.isEmpty()) {
+        QSKIP("NotoSans fixture missing");
+    }
+
+    FontWidget view;
+    QVERIFY(view.init(noto_vf));
+    view.resize(850, 720);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    auto *text_tab = view.findChild<TextPreviewTab *>();
+    auto *feat_bar = view.findChild<OpenTypeFeaturesBar *>();
+    auto *feat_btn = view.findChild<QPushButton *>(
+        QStringLiteral("text_features_btn"));
+    auto *sample_lbl = view.findChild<QLabel *>(QStringLiteral("label_sample"));
+    auto *tabs       = view.findChild<QTabWidget *>();
+    QVERIFY(text_tab && feat_bar && feat_btn && sample_lbl && tabs);
+
+    // Drawer is collapsed by default.
+    QVERIFY(!feat_bar->isVisible());
+    QCOMPARE(feat_btn->text(), QStringLiteral("Features"));
+
+    // Toggling feature & letter spacing updates Text tab and badge, while
+    // Sample tab remains completely isolated across tab switches & refreshes.
+    view.setFeatureEnabled(QByteArrayLiteral("smcp"), true);
+    view.setLetterSpacing(2.5);
+    QApplication::processEvents();
+    QCOMPARE(feat_btn->text(), QStringLiteral("Features · 1"));
+
+    tabs->setCurrentIndex(1);  // Sample tab
+    QApplication::processEvents();
+    QVERIFY(sample_lbl->font().featureTags().isEmpty());
+    QVERIFY(qFuzzyIsNull(sample_lbl->font().letterSpacing()));
+
+    // Ctrl+Shift+R resets OpenType overrides even while drawer is collapsed.
+    QAction *reset_ot = view.shortcutAction(FontShortcutAction::ResetOpenType);
+    QVERIFY(reset_ot != nullptr);
+    QVERIFY(reset_ot->isEnabled());
+    reset_ot->trigger();
+    QApplication::processEvents();
+    QVERIFY(!view.isFeatureEnabled(QByteArrayLiteral("smcp")));
+    QCOMPARE(feat_btn->text(), QStringLiteral("Features"));
+
+    // Expand drawer and verify no dangling/consecutive separators across widths.
+    tabs->setCurrentIndex(0);
+    feat_btn->click();
+    QApplication::processEvents();
+    QVERIFY(feat_bar->isVisible());
+
+    auto check_separators = [feat_bar]() {
+        QList<QWidget *> seps;
+        for (QWidget *w : feat_bar->findChildren<QWidget *>()) {
+            if (w->property("flow_separator").toBool()) {
+                seps.append(w);
+            }
+        }
+        QVERIFY(!seps.isEmpty());
+        for (QWidget *sep : seps) {
+            if (sep->geometry().isEmpty()) {
+                continue;
+            }
+            const QRect sr = sep->geometry();
+            QWidget *host  = sep->parentWidget();
+            QVERIFY(host != nullptr);
+            bool has_left_pill  = false;
+            bool has_right_pill = false;
+            for (QPushButton *pill : feat_bar->pillButtons()) {
+                const QRect pr = pill->geometry();
+                if (pr.isEmpty() || qAbs(pr.center().y() - sr.center().y()) > 8) {
+                    continue;
+                }
+                if (pr.right() < sr.left()) {
+                    has_left_pill = true;
+                }
+                else if (pr.left() > sr.right()) {
+                    has_right_pill = true;
+                }
+            }
+            QVERIFY2(has_left_pill && has_right_pill,
+                     "Separator must not appear at row start or row end");
+        }
+        const QVector<QPushButton *> pills = feat_bar->pillButtons();
+        for (int i = 0; i + 1 < pills.size(); ++i) {
+            const QRect r1 = pills[i]->geometry();
+            const QRect r2 = pills[i + 1]->geometry();
+            if (r1.isEmpty() || r2.isEmpty()
+                || qAbs(r1.center().y() - r2.center().y()) > 8) {
+                continue;
+            }
+            const QByteArray t1
+                = pills[i]->text().section(QStringLiteral(" · "), 0, 0).toLatin1();
+            const QByteArray t2
+                = pills[i + 1]->text().section(QStringLiteral(" · "), 0, 0).toLatin1();
+            if (FontInspectorEngine::featureGroupIndex(t1)
+                == FontInspectorEngine::featureGroupIndex(t2)) {
+                continue;
+            }
+            bool found_sep = false;
+            for (QWidget *sep : seps) {
+                const QRect sr = sep->geometry();
+                if (!sr.isEmpty()
+                    && qAbs(sr.center().y() - r1.center().y()) <= 8
+                    && sr.left() > r1.right() && sr.right() < r2.left()) {
+                    found_sep = true;
+                    break;
+                }
+            }
+            QVERIFY2(found_sep,
+                     "Adjacent pills from different groups on the same row must have a separator");
+        }
+    };
+
+    for (int w : {850, 510, 384}) {
+        view.resize(w, 720);
+        QApplication::processEvents();
+        check_separators();
+    }
+}
+
+void ViewerTest::openTypeMutexGroupsAndSingleSignal()
+{
+    OpenTypeFeaturesBar bar;
+    bar.rebuild({
+        {QByteArrayLiteral("lnum"), QStringLiteral("Lining Figures"), false},
+        {QByteArrayLiteral("onum"), QStringLiteral("Oldstyle Figures"), false},
+        {QByteArrayLiteral("pnum"), QStringLiteral("Proportional Figures"), false},
+        {QByteArrayLiteral("tnum"), QStringLiteral("Tabular Figures"), false},
+        {QByteArrayLiteral("frac"), QStringLiteral("Fractions"), false},
+        {QByteArrayLiteral("afrc"), QStringLiteral("Alternative Fractions"), false},
+        {QByteArrayLiteral("sups"), QStringLiteral("Superscript"), false},
+        {QByteArrayLiteral("subs"), QStringLiteral("Subscript"), false},
+        {QByteArrayLiteral("sinf"), QStringLiteral("Scientific Inferiors"), false},
+    });
+    bar.show();
+    bar.resize(700, 120);
+    QApplication::processEvents();
+
+    QSignalSpy spy(&bar, &OpenTypeFeaturesBar::sigFeaturesChanged);
+    auto find_pill = [&bar](const char *tag) -> QPushButton * {
+        for (QPushButton *b : bar.pillButtons()) {
+            if (b->text().startsWith(QString::fromLatin1(tag))) {
+                return b;
+            }
+        }
+        return nullptr;
+    };
+
+    // Group A: lnum <-> onum
+    QPushButton *lnum = find_pill("lnum");
+    QPushButton *onum = find_pill("onum");
+    QVERIFY(lnum && onum);
+    lnum->click();
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(bar.isFeatureEnabled("lnum"));
+    onum->click();
+    QCOMPARE(spy.count(), 2);
+    QVERIFY(!bar.isFeatureEnabled("lnum"));
+    QVERIFY(bar.isFeatureEnabled("onum"));
+    QVERIFY(!lnum->isChecked());
+    // Click active item again -> turns off (radio-or-off).
+    onum->click();
+    QCOMPARE(spy.count(), 3);
+    QVERIFY(!bar.isFeatureEnabled("onum"));
+
+    // Group B: pnum <-> tnum via setFeatureEnabled (no-op keeps signal silent)
+    bar.setFeatureEnabled("pnum", true);
+    QCOMPARE(spy.count(), 4);
+    bar.setFeatureEnabled("pnum", true);
+    QCOMPARE(spy.count(), 4);
+    bar.setFeatureEnabled("tnum", true);
+    QCOMPARE(spy.count(), 5);
+    bar.setFeatureEnabled("pnum", false);
+    QCOMPARE(spy.count(), 5);
+    QVERIFY(!bar.isFeatureEnabled("pnum"));
+    QVERIFY(bar.isFeatureEnabled("tnum"));
+
+    // Group C: frac <-> afrc
+    bar.setFeatureEnabled("frac", true);
+    bar.setFeatureEnabled("afrc", true);
+    QVERIFY(!bar.isFeatureEnabled("frac"));
+    QVERIFY(bar.isFeatureEnabled("afrc"));
+
+    // Group D: sups <-> subs <-> sinf
+    bar.setFeatureEnabled("sups", true);
+    bar.setFeatureEnabled("subs", true);
+    QVERIFY(!bar.isFeatureEnabled("sups"));
+    QVERIFY(bar.isFeatureEnabled("subs"));
+    bar.setFeatureEnabled("sinf", true);
+    QVERIFY(!bar.isFeatureEnabled("subs"));
+    QVERIFY(bar.isFeatureEnabled("sinf"));
+
+    // Reset clears all overrides.
+    bar.resetOverrides();
+    QVERIFY(!bar.hasOverrides());
+    for (QPushButton *b : bar.pillButtons()) {
+        QVERIFY(!b->isChecked());
+    }
+}
+
+void ViewerTest::flowLayoutWrapsNextGroupWhenSeparatorOverflowsBoundary()
+{
+    QWidget host;
+    auto *flow = new fontui::FlowLayout(&host, 5, 4);
+    auto *a    = new QPushButton(&host);
+    auto *sep  = new fontui::FlowSeparator(1.0, &host);
+    auto *b    = new QPushButton(&host);
+    a->setFixedSize(60, 20);
+    b->setFixedSize(60, 20);
+    flow->addWidget(a);
+    flow->addWidget(sep);
+    flow->addWidget(b);
+
+    // At 125px, A (60) + gap (5) + B (60) = 125 fits, while A + gap + sep (1) +
+    // gap + B = 131 overflows. Hiding sep must wrap B onto the second row so
+    // two groups never sit adjacent on one row without a separator.
+    host.resize(125, 100);
+    host.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&host));
+    QApplication::processEvents();
+
+    QVERIFY(sep->geometry().isEmpty());
+    QVERIFY(b->geometry().top() > a->geometry().bottom());
+    QCOMPARE(host.layout()->heightForWidth(125), 20 + 4 + 20);
+}
+
+void ViewerTest::sliderBadgesStayCloserToOwnSliderAndDrawerUsesClear()
+{
+    const QString noto_vf = fixturePath("NotoSans-VariableFont_wdth,wght.ttf");
+    if (noto_vf.isEmpty()) {
+        QSKIP("NotoSans fixture missing");
+    }
+
+    FontWidget view;
+    QVERIFY(view.init(noto_vf));
+    view.resize(900, 720);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QApplication::processEvents();
+
+    auto *line_val = view.findChild<QLabel *>(
+        QStringLiteral("text_line_value_label"));
+    auto *space_val = view.findChild<QLabel *>(
+        QStringLiteral("text_space_value_label"));
+    QVERIFY(line_val != nullptr && space_val != nullptr);
+
+    QWidget *line_host  = line_val->parentWidget();
+    QWidget *space_host = space_val->parentWidget();
+    QVERIFY(line_host != nullptr && space_host != nullptr);
+    auto *line_slider = line_host->findChild<QSlider *>();
+    QVERIFY(line_slider != nullptr);
+
+    // Height value badge sits adjacent to its own slider and visibly further
+    // from the Spacing group (Gestalt proximity).
+    const int gap_to_own_slider
+        = line_val->geometry().left() - line_slider->geometry().right() - 1;
+    const int gap_to_next_group
+        = space_host->geometry().left() - line_host->geometry().right() - 1;
+    QVERIFY(gap_to_own_slider >= 0 && gap_to_own_slider <= 6);
+    QVERIFY(gap_to_next_group > gap_to_own_slider);
+
+    // Modified badge weight must not shrink horizontal padding or shift size.
+    const int badge_w_before = space_val->width();
+    view.setLetterSpacing(-20.0);
+    QApplication::processEvents();
+    QCOMPARE(space_val->width(), badge_w_before);
+    QFont med_font = space_val->font();
+    med_font.setWeight(QFont::Medium);
+    QVERIFY(space_val->width()
+            >= QFontMetrics(med_font).horizontalAdvance(QStringLiteral("-20.0"))
+                   + 8);
+    view.setLetterSpacing(0.0);
+    QApplication::processEvents();
+
+    // OpenType drawer omits redundant title label, keeps spacing note hidden
+    // by default, and reveals "Clear" in its reserved slot without jumping.
+    auto *feat_bar = view.findChild<OpenTypeFeaturesBar *>();
+    auto *feat_btn = view.findChild<QPushButton *>(
+        QStringLiteral("text_features_btn"));
+    auto *ot_note = view.findChild<QLabel *>(
+        QStringLiteral("opentype_note"));
+    auto *ot_clear = view.findChild<QPushButton *>(
+        QStringLiteral("opentype_reset_btn"));
+    auto *tb_reset = view.findChild<QPushButton *>(
+        QStringLiteral("text_toolbar_reset_btn"));
+    QVERIFY(feat_bar != nullptr && feat_btn != nullptr && ot_note != nullptr
+            && ot_clear != nullptr && tb_reset != nullptr);
+    for (QLabel *lbl : feat_bar->findChildren<QLabel *>()) {
+        QVERIFY(!lbl->text().contains(QStringLiteral("OpenType Features")));
+    }
+    feat_btn->click();
+    QApplication::processEvents();
+    QVERIFY(feat_bar->isVisible());
+    QVERIFY(!ot_note->isVisible());
+    QVERIFY(!ot_clear->isVisible());
+    const int h_before = feat_bar->height();
+    view.setFeatureEnabled(QByteArrayLiteral("smcp"), true);
+    QApplication::processEvents();
+    QVERIFY(ot_clear->isVisible());
+    QCOMPARE(feat_bar->height(), h_before);
+    QCOMPARE(ot_clear->text(), QStringLiteral("Clear"));
+    QCOMPARE(tb_reset->text(), QStringLiteral("Reset"));
+
+    // Inspector preview canvas keeps generous minimum height and descriptive
+    // guide tooltips.
+    auto *gi_preview = view.findChild<GlyphPreviewWidget *>();
+    QVERIFY(gi_preview != nullptr);
+    QVERIFY(gi_preview->minimumHeight() >= 380);
+    auto *gi = view.findChild<GlyphInspectorWidget *>();
+    QVERIFY(gi != nullptr);
+    for (QPushButton *pill : gi->guidePillButtons()) {
+        QVERIFY(pill->toolTip().contains(QStringLiteral(" — ")));
+    }
+    auto *outline_pill = gi->findChild<QPushButton *>(
+        QStringLiteral("guide_pill_outline"));
+    QVERIFY(outline_pill != nullptr);
+    QVERIFY(outline_pill->toolTip().contains(QStringLiteral(" — ")));
+
+    QCOMPARE(QString::fromLatin1(FONTVIEWER_VERSION_STR),
+             QStringLiteral("1.4.1"));
+    QVERIFY(!QString::fromLatin1(FONTVIEWER_GIT_HASH).isEmpty());
+    QCOMPARE(QString::fromLatin1(FONTVIEWER_PRODUCT_VERSION_STRING),
+             QStringLiteral("%1+%2").arg(
+                 QString::fromLatin1(FONTVIEWER_VERSION_STR),
+                 QString::fromLatin1(FONTVIEWER_GIT_HASH)));
 }
 
 QTEST_MAIN(ViewerTest)

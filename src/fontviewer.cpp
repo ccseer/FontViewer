@@ -10,6 +10,7 @@
 
 #include "engine/fontinspectorengine.h"
 #include "fontwidget.h"
+#include "gitversion.h"
 #include "seer/viewerhelper.h"
 
 #define qprintt qDebug() << "[FontViewer]"
@@ -23,6 +24,7 @@ constexpr auto g_ini_letter_spacing = "letter_spacing";
 constexpr auto g_ini_waterfall      = "waterfall_enabled";
 constexpr auto g_ini_invert         = "invert_preview";
 constexpr auto g_ini_show_outline   = "show_outline_points";
+constexpr auto g_ini_hidden_guides  = "hidden_guides";
 
 constexpr int g_def_pt                = 16;
 constexpr double g_def_line_height    = 1.4;
@@ -47,6 +49,13 @@ FontViewer::~FontViewer()
         m_ini->setValue(g_ini_waterfall, m_view->isWaterfallEnabled());
         m_ini->setValue(g_ini_invert, m_view->isInvertPreview());
         m_ini->setValue(g_ini_show_outline, m_view->isShowOutlinePoints());
+        const QStringList hidden_guides = m_view->hiddenGuideIds();
+        if (hidden_guides.isEmpty()) {
+            m_ini->remove(g_ini_hidden_guides);
+        }
+        else {
+            m_ini->setValue(g_ini_hidden_guides, hidden_guides);
+        }
     }
 }
 
@@ -107,6 +116,8 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
         emit sigCommand(VCT_StateChange, VCV_Error);
         return;
     }
+    qprintt << "version:" << FONTVIEWER_VERSION_STR
+            << "commit:" << FONTVIEWER_GIT_HASH;
     m_ini = new QSettings(getIniPath(), QSettings::IniFormat, this);
     m_view->loadShortcuts(*m_ini);
     m_view->loadPresets(*m_ini);
@@ -143,6 +154,8 @@ void FontViewer::loadImpl(QBoxLayout *layout_content,
     m_view->setInvertPreview(m_ini->value(g_ini_invert, false).toBool());
     m_view->setShowOutlinePoints(
         m_ini->value(g_ini_show_outline, false).toBool());
+    m_view->setHiddenGuideIds(
+        m_ini->value(g_ini_hidden_guides).toStringList());
 
     updateDPR(options()->dpr());
     updateTheme(options()->theme());
@@ -167,7 +180,6 @@ void FontViewer::loadFileInfo()
     QVector<QPair<QString, QString>> props;
     props.reserve(records.size());
     for (const auto &r : records) {
-        qprintt << "font info:" << r.label << r.value;
         props.append({r.label, r.value});
     }
     emit sigCommand(VCT_AppendProperty, QVariant::fromValue(props));

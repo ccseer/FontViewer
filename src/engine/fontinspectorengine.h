@@ -103,6 +103,7 @@ public:
 
     static QVector<FontNameRecord> readNameRecords(const QString &font_path);
     static QString normalizeStyleName(const QString &name);
+    static int featureGroupIndex(const QByteArray &tag);
     QString probeSampleForFace(int face_index) const;
 
 private:

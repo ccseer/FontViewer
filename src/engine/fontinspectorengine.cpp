@@ -289,6 +289,7 @@ QString standardFeatureName(const QByteArray &tag)
         {"tnum", "Tabular Figures"},
         {"onum", "Oldstyle Figures"},
         {"frac", "Fractions"},
+        {"afrc", "Alternative Fractions"},
         {"zero", "Slashed Zero"},
         {"lnum", "Lining Figures"},
         {"pnum", "Proportional Figures"},
@@ -300,12 +301,16 @@ QString standardFeatureName(const QByteArray &tag)
         {"ordn", "Ordinals"},
         {"sups", "Superscript"},
         {"subs", "Subscript"},
+        {"sinf", "Scientific Inferiors"},
         {"pcap", "Petite Capitals"},
+        {"c2pc", "Petite Capitals From Capitals"},
         {"case", "Case-Sensitive Forms"},
         {"titl", "Titling"},
+        {"unic", "Unicase"},
         {"clig", "Contextual Ligatures"},
         {"hlig", "Historical Ligatures"},
         {"rlig", "Required Ligatures"},
+        {"rclt", "Required Contextual Alternates"},
         {"ccmp", "Glyph Composition / Decomposition"},
         {"mark", "Mark Positioning"},
         {"mkmk", "Mark to Mark Positioning"},
@@ -326,30 +331,66 @@ QString standardFeatureName(const QByteArray &tag)
     return QString::fromLatin1(tag);
 }
 
-int featureSortGroup(const QByteArray &tag, int *suborder)
+int computeFeatureSortGroup(const QByteArray &tag, int *suborder)
 {
-    static constexpr const char *kCommonOrder[] = {
-        "liga", "dlig", "calt", "kern", "smcp",
-        "c2sc", "tnum", "onum", "frac", "zero",
+    static constexpr const char *kGroup0[] = {
+        "liga", "clig", "dlig", "hlig", "calt", "kern", "rlig", "rclt",
     };
-    for (int i = 0; i < int(std::size(kCommonOrder)); ++i) {
-        if (tag == kCommonOrder[i]) {
-            *suborder = i;
-            return 0;
+    static constexpr const char *kGroup1[] = {
+        "smcp", "c2sc", "pcap", "c2pc", "case", "titl", "unic",
+    };
+    static constexpr const char *kGroup2[] = {
+        "lnum", "onum",
+    };
+    static constexpr const char *kGroup3[] = {
+        "pnum", "tnum",
+    };
+    static constexpr const char *kGroup4[] = {
+        "zero", "frac", "afrc",
+    };
+    static constexpr const char *kGroup5[] = {
+        "sups", "subs", "sinf", "ordn",
+    };
+    struct GroupTable {
+        const char *const *tags;
+        int count;
+    };
+    static constexpr GroupTable kGroups[] = {
+        {kGroup0, int(std::size(kGroup0))},
+        {kGroup1, int(std::size(kGroup1))},
+        {kGroup2, int(std::size(kGroup2))},
+        {kGroup3, int(std::size(kGroup3))},
+        {kGroup4, int(std::size(kGroup4))},
+        {kGroup5, int(std::size(kGroup5))},
+    };
+    for (int g = 0; g < int(std::size(kGroups)); ++g) {
+        for (int i = 0; i < kGroups[g].count; ++i) {
+            if (tag == kGroups[g].tags[i]) {
+                if (suborder) {
+                    *suborder = i;
+                }
+                return g;
+            }
         }
     }
     if (const int ss = parsePrefixedTwoDigitTag(tag, 's', 's', 1, 20);
         ss > 0) {
-        *suborder = ss;
-        return 1;
+        if (suborder) {
+            *suborder = ss;
+        }
+        return 6;
     }
     if (const int cv = parsePrefixedTwoDigitTag(tag, 'c', 'v', 1, 99);
         cv > 0) {
-        *suborder = cv;
-        return 2;
+        if (suborder) {
+            *suborder = cv;
+        }
+        return 7;
     }
-    *suborder = 0;
-    return 3;
+    if (suborder) {
+        *suborder = 0;
+    }
+    return 8;
 }
 
 bool isDefaultOnFeature(const QByteArray &tag)
@@ -604,8 +645,8 @@ void extractOtFeatures(FT_Face face,
               [](const FontFeatureInfo &a, const FontFeatureInfo &b) {
                   int sub_a    = 0;
                   int sub_b    = 0;
-                  const int ga = featureSortGroup(a.tag, &sub_a);
-                  const int gb = featureSortGroup(b.tag, &sub_b);
+                  const int ga = computeFeatureSortGroup(a.tag, &sub_a);
+                  const int gb = computeFeatureSortGroup(b.tag, &sub_b);
                   if (ga != gb) {
                       return ga < gb;
                   }
@@ -616,6 +657,11 @@ void extractOtFeatures(FT_Face face,
               });
 }
 }  // namespace
+
+int FontInspectorEngine::featureGroupIndex(const QByteArray &tag)
+{
+    return computeFeatureSortGroup(tag, nullptr);
+}
 
 FontInspectorEngine::~FontInspectorEngine()
 {

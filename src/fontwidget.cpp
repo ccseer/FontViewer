@@ -153,8 +153,8 @@ void FontWidget::initUI(const QStringList &names_raw)
     connect(ui->tabWidget, &QTabWidget::currentChanged, this,
             &FontWidget::onTabChanged);
 
-    // Group variable axes and OpenType features in one Typography section
-    // between the header and the preview tabs.
+    // Group variable axes in one Typography section between the header and the
+    // preview tabs.
     m_typo_group = new QGroupBox(tr("Typography"), this);
     m_typo_group->setFocusPolicy(Qt::NoFocus);
     auto *typo_lay = new QVBoxLayout(m_typo_group);
@@ -165,16 +165,6 @@ void FontWidget::initUI(const QStringList &names_raw)
 
     initAxesBar();
     typo_lay->addWidget(m_axes_bar);
-
-    m_typo_sep = new QFrame(m_typo_group);
-    m_typo_sep->setFrameShape(QFrame::HLine);
-    m_typo_sep->setFrameShadow(QFrame::Plain);
-    m_typo_sep->setFocusPolicy(Qt::NoFocus);
-    m_typo_sep->hide();
-    typo_lay->addWidget(m_typo_sep);
-
-    initFeaturesBar();
-    typo_lay->addWidget(m_features_bar);
 
     m_typo_group->hide();
     ui->gridLayout->removeWidget(ui->tabWidget);
@@ -219,12 +209,11 @@ void FontWidget::initTextTab()
     connect(m_tab_text, &TextPreviewTab::sigZoomRequested, this,
             &FontWidget::zoomSize);
     connect(m_tab_text, &TextPreviewTab::sigLetterSpacingChanged, this,
-            [this](qreal s) {
-                if (m_features_bar) {
-                    m_features_bar->setLetterSpacingActive(!qFuzzyIsNull(s));
-                }
-                updateTabTextPreview();
-            });
+            [this](qreal) { updateTabTextPreview(); });
+    connect(m_tab_text, &TextPreviewTab::sigFeaturesChanged, this, [this]() {
+        updateResetFeatureActionState();
+        refreshActiveTabFromFeatures();
+    });
     connect(m_tab_text, &TextPreviewTab::sigInteractionClearFocus, this,
             &FontWidget::clearViewerFocus);
 }
@@ -317,30 +306,11 @@ void FontWidget::initAxesBar()
             &FontWidget::clearViewerFocus);
 }
 
-void FontWidget::initFeaturesBar()
-{
-    m_features_bar = new OpenTypeFeaturesBar(
-        m_typo_group ? static_cast<QWidget *>(m_typo_group) : this);
-    m_features_bar->setDpr(m_dpr);
-    connect(m_features_bar, &OpenTypeFeaturesBar::sigFeaturesChanged, this,
-            [this]() {
-                updateResetFeatureActionState();
-                refreshActiveTabFromFeatures();
-            });
-    connect(m_features_bar, &OpenTypeFeaturesBar::sigInteractionClearFocus,
-            this, &FontWidget::clearViewerFocus);
-}
-
 void FontWidget::syncTypographyGroupVisibility()
 {
-    const bool has_axes     = m_axes_bar && !m_axes_bar->isHidden();
-    const bool has_features = m_features_bar && !m_features_bar->isHidden();
-    if (m_typo_sep) {
-        m_typo_sep->setVisible(has_axes && has_features);
-    }
+    const bool has_axes = m_axes_bar && !m_axes_bar->isHidden();
     if (m_typo_group) {
-        m_typo_group->setVisible(!m_is_collapsed
-                                 && (has_axes || has_features));
+        m_typo_group->setVisible(!m_is_collapsed && has_axes);
     }
 }
 
@@ -364,9 +334,6 @@ void FontWidget::updateLayoutMetrics()
     if (m_axes_bar) {
         m_axes_bar->setDpr(m_dpr);
     }
-    if (m_features_bar) {
-        m_features_bar->setDpr(m_dpr);
-    }
     if (m_tab_text) {
         m_tab_text->setDpr(m_dpr);
     }
@@ -384,7 +351,7 @@ void FontWidget::updateLayoutMetrics()
 void FontWidget::updateResetFeatureActionState()
 {
     if (QAction *act = shortcutAction(FontShortcutAction::ResetOpenType)) {
-        act->setEnabled(m_features_bar && m_features_bar->hasOverrides());
+        act->setEnabled(m_tab_text && m_tab_text->hasOpenTypeOverrides());
     }
 }
 
@@ -508,10 +475,10 @@ QFont FontWidget::buildPreviewFont(int pt_size, PreviewFontRole role) const
     }
 
     if (role == PreviewFontRole::Text) {
-        const qreal spacing = getLetterSpacing();
+        const qreal spacing    = getLetterSpacing();
         const bool has_spacing = !qFuzzyIsNull(spacing);
-        if (m_features_bar) {
-            const auto &overrides = m_features_bar->overrides();
+        if (m_tab_text) {
+            const auto &overrides = m_tab_text->openTypeOverrides();
             for (auto it = overrides.cbegin(); it != overrides.cend(); ++it) {
                 if (has_spacing
                     && OpenTypeFeaturesBar::isLigatureFeatureTag(it.key())) {
@@ -607,6 +574,22 @@ void FontWidget::clearPreviewUndoHistory()
     }
 }
 
+void FontWidget::syncOpenTypeFeatures()
+{
+    if (!m_tab_text) {
+        return;
+    }
+    // Technical validation gate (Qt 6.8.3 headers): Qt provides no per-font
+    // OpenType `locl` language override on Windows DirectWrite, so keep the
+    // bar free of non-functional language selectors while honoring GSUB/GPOS
+    // features via QFont::setFeature().
+    m_tab_text->setOpenTypeFeatures(
+        m_inspector.isValid()
+            ? m_inspector.inspectFace(m_face_index).ot_features
+            : QVector<FontFeatureInfo>{});
+    updateResetFeatureActionState();
+}
+
 void FontWidget::onNameChanged()
 {
     const auto name = ui->comboBox_family->currentText();
@@ -623,17 +606,7 @@ void FontWidget::onNameChanged()
     if (m_axes_bar) {
         m_axes_bar->rebuild(m_inspector, m_face_index, name, true);
     }
-    if (m_features_bar) {
-        // Technical validation gate (Qt 6.8.3 headers): Qt provides no per-font
-        // OpenType `locl` language override on Windows DirectWrite, so keep the
-        // bar free of non-functional language selectors while honoring GSUB/GPOS
-        // features via QFont::setFeature().
-        m_features_bar->rebuild(
-            m_inspector.isValid()
-                ? m_inspector.inspectFace(m_face_index).ot_features
-                : QVector<FontFeatureInfo>{});
-        updateResetFeatureActionState();
-    }
+    syncOpenTypeFeatures();
     syncTypographyGroupVisibility();
 
     onStyleChanged();
@@ -649,13 +622,7 @@ void FontWidget::onStyleChanged()
         if (m_axes_bar) {
             m_axes_bar->rebuild(m_inspector, m_face_index, name, false);
         }
-        if (m_features_bar) {
-            m_features_bar->rebuild(
-                m_inspector.isValid()
-                    ? m_inspector.inspectFace(m_face_index).ot_features
-                    : QVector<FontFeatureInfo>{});
-            updateResetFeatureActionState();
-        }
+        syncOpenTypeFeatures();
         syncTypographyGroupVisibility();
     }
     if (m_axes_bar) {
@@ -810,7 +777,7 @@ void FontWidget::onTabChanged()
     else if (cur_wnd == m_tab_sample) {
         if (m_sample_dirty && m_tab_sample) {
             m_tab_sample->setSampleFont(
-                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Text));
+                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Sample));
             m_sample_dirty = false;
         }
         else {
@@ -868,20 +835,12 @@ void FontWidget::refreshGlyphInspectorFromFont()
 
 void FontWidget::refreshActiveTabFromFeatures()
 {
-    m_text_dirty   = true;
-    m_sample_dirty = true;
+    m_text_dirty = true;
 
     auto cur_wnd = ui->tabWidget->currentWidget();
     if (cur_wnd == m_tab_text) {
         refreshTextWidgetsFromFont();
         m_text_dirty = false;
-    }
-    else if (cur_wnd == m_tab_sample) {
-        if (m_tab_sample) {
-            m_tab_sample->setSampleFont(
-                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Text));
-        }
-        m_sample_dirty = false;
     }
 }
 
@@ -897,23 +856,41 @@ bool FontWidget::isShowOutlinePoints() const
     return m_wnd_gi ? m_wnd_gi->isShowOutlinePoints() : false;
 }
 
+QStringList FontWidget::hiddenGuideIds() const
+{
+    return m_wnd_gi ? m_wnd_gi->hiddenGuideIds() : QStringList{};
+}
+
+void FontWidget::setHiddenGuideIds(const QStringList &ids)
+{
+    if (m_wnd_gi) {
+        m_wnd_gi->setHiddenGuideIds(ids);
+    }
+}
+
 void FontWidget::setFeatureEnabled(const QByteArray &tag, bool enabled)
 {
-    if (m_features_bar) {
-        m_features_bar->setFeatureEnabled(tag, enabled);
+    if (m_tab_text) {
+        m_tab_text->setFeatureEnabled(tag, enabled);
         updateResetFeatureActionState();
     }
 }
 
 bool FontWidget::isFeatureEnabled(const QByteArray &tag) const
 {
-    return m_features_bar ? m_features_bar->isFeatureEnabled(tag) : false;
+    return m_tab_text ? m_tab_text->isFeatureEnabled(tag) : false;
 }
 
 QVector<QPushButton *> FontWidget::featurePillButtons() const
 {
-    return m_features_bar ? m_features_bar->pillButtons()
-                          : QVector<QPushButton *>{};
+    return m_tab_text ? m_tab_text->featurePillButtons()
+                      : QVector<QPushButton *>{};
+}
+
+QHash<QByteArray, bool> FontWidget::featureOverrides() const
+{
+    static const QHash<QByteArray, bool> kEmpty;
+    return m_tab_text ? m_tab_text->openTypeOverrides() : kEmpty;
 }
 
 void FontWidget::refreshActiveTabFromAxes()
@@ -931,7 +908,7 @@ void FontWidget::refreshActiveTabFromAxes()
     else if (cur_wnd == m_tab_sample) {
         if (m_tab_sample) {
             m_tab_sample->setSampleFont(
-                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Text));
+                buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Sample));
         }
         m_sample_dirty = false;
     }
@@ -954,9 +931,10 @@ void FontWidget::updateTabTextPreview()
     if (!m_tab_text || !m_wnd_char) {
         return;
     }
-    const int pt           = getCurrentFontSize();
-    const QFont text_font  = buildPreviewFont(pt, PreviewFontRole::Text);
-    const QFont glyph_font = buildPreviewFont(pt, PreviewFontRole::Glyph);
+    const int pt            = getCurrentFontSize();
+    const QFont text_font   = buildPreviewFont(pt, PreviewFontRole::Text);
+    const QFont sample_font = buildPreviewFont(pt, PreviewFontRole::Sample);
+    const QFont glyph_font  = buildPreviewFont(pt, PreviewFontRole::Glyph);
 
     m_tab_text->applyFont(text_font, pt);
     m_text_dirty = false;
@@ -973,10 +951,10 @@ void FontWidget::updateTabTextPreview()
         updateGlyphInspectorFont(glyph_font);
         m_gi_dirty = false;
     }
-    // The Sample tab shares the family/style/size state; only its text differs,
-    // so refresh the font here instead of waiting for the next family change.
+    // The Sample tab shares the family/style/size/variable-axis state without
+    // Text tab OpenType overrides or letter spacing.
     if (m_tab_sample) {
-        m_tab_sample->setSampleFont(text_font);
+        m_tab_sample->setSampleFont(sample_font);
         m_sample_dirty = false;
     }
 }
@@ -988,7 +966,7 @@ void FontWidget::updateSamplePreview()
     }
     m_tab_sample->updateSample(
         ui->comboBox_family->currentText(),
-        buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Text));
+        buildPreviewFont(getCurrentFontSize(), PreviewFontRole::Sample));
 }
 
 void FontWidget::copy()
@@ -1190,22 +1168,15 @@ void FontWidget::updateTheme(int theme)
         }
     }
 
-    if (m_typo_sep) {
-        QPalette sep_pal = m_typo_sep->palette();
-        sep_pal.setColor(QPalette::WindowText,
-                         fontui::frameBorderColor(palette()));
-        m_typo_sep->setPalette(sep_pal);
-    }
-
     if (m_wnd_gi) {
         m_wnd_gi->updateTheme(theme);
-    }
-    if (m_features_bar) {
-        m_features_bar->applyPalette();
     }
     if (m_tab_text) {
         m_tab_text->applyInvertPreview();
         m_tab_text->updateWaterfall();
+        if (auto *fb = m_tab_text->featuresBar()) {
+            fb->applyPalette();
+        }
     }
 }
 
@@ -1370,13 +1341,13 @@ void FontWidget::initActions()
     });
     QAction *reset_act
         = add_action(FontShortcutAction::ResetOpenType, [this]() {
-              if (m_features_bar) {
-                  m_features_bar->resetOverrides();
+              if (m_tab_text) {
+                  m_tab_text->resetOpenTypeFeatures();
                   updateResetFeatureActionState();
               }
               clearViewerFocus();
           });
-    reset_act->setEnabled(m_features_bar && m_features_bar->hasOverrides());
+    reset_act->setEnabled(m_tab_text && m_tab_text->hasOpenTypeOverrides());
 
     add_action(FontShortcutAction::ZoomIn, [this]() { zoomSize(1); });
     add_action(FontShortcutAction::ZoomOut, [this]() { zoomSize(-1); });
@@ -1443,10 +1414,7 @@ void FontWidget::applyShortcuts()
     if (m_tab_text) {
         m_tab_text->updateShortcutTooltips(
             m_shortcuts.text(FontShortcutAction::ToggleInvert),
-            m_shortcuts.text(FontShortcutAction::ToggleWaterfall));
-    }
-    if (m_features_bar) {
-        m_features_bar->setResetShortcutHint(
+            m_shortcuts.text(FontShortcutAction::ToggleWaterfall),
             m_shortcuts.text(FontShortcutAction::ResetOpenType));
     }
     if (m_wnd_gi) {

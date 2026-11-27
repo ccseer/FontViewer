@@ -12,12 +12,10 @@
 
 class CharacterWidget;
 class GlyphInspectorWidget;
-class OpenTypeFeaturesBar;
 class SamplePreviewTab;
 class TextPreviewTab;
 class VariableAxesBar;
 class QAction;
-class QFrame;
 class QGroupBox;
 class QHBoxLayout;
 class QLabel;
@@ -33,6 +31,7 @@ class FontWidget : public QWidget {
 public:
     enum class PreviewFontRole {
         Text,
+        Sample,
         Glyph,
     };
 
@@ -73,9 +72,12 @@ public:
     bool isInvertPreview() const;
     void setShowOutlinePoints(bool on);
     bool isShowOutlinePoints() const;
+    QStringList hiddenGuideIds() const;
+    void setHiddenGuideIds(const QStringList &ids);
     void setFeatureEnabled(const QByteArray &tag, bool enabled);
     bool isFeatureEnabled(const QByteArray &tag) const;
     QVector<QPushButton *> featurePillButtons() const;
+    QHash<QByteArray, bool> featureOverrides() const;
 
     QVector<FontNameRecord> readNameRecords();
     int currentFaceIndex() const
@@ -96,7 +98,7 @@ protected:
 private:
     void initUI(const QStringList &names);
     void initAxesBar();
-    void initFeaturesBar();
+    void syncOpenTypeFeatures();
     void syncTypographyGroupVisibility();
     void updateLayoutMetrics();
     void initTextTab();
@@ -130,9 +132,7 @@ private:
     int m_face_index = 0;
 
     QGroupBox *m_typo_group             = nullptr;
-    QFrame *m_typo_sep                  = nullptr;
     VariableAxesBar *m_axes_bar         = nullptr;
-    OpenTypeFeaturesBar *m_features_bar = nullptr;
     bool m_text_dirty                   = false;
     bool m_sample_dirty                 = false;
     bool m_char_dirty                   = false;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(fontviewer VERSION 1.4.0 LANGUAGES CXX)
+project(fontviewer VERSION 1.4.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,11 +7,31 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
+set(FONTVIEWER_GIT_VERSION_HEADER "${CMAKE_CURRENT_BINARY_DIR}/gitversion.h")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DOUTPUT_FILE=${FONTVIEWER_GIT_VERSION_HEADER}"
+        "-DVERSION=${PROJECT_VERSION}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
+)
+add_custom_target(fontviewer_git_version ALL
+    COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DOUTPUT_FILE=${FONTVIEWER_GIT_VERSION_HEADER}"
+        "-DVERSION=${PROJECT_VERSION}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
+    BYPRODUCTS "${FONTVIEWER_GIT_VERSION_HEADER}"
+    VERBATIM
+)
+
 if(WIN32)
     enable_language(RC)
     set(FONTVIEWER_RC_VERSION "${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0")
-    set(FONTVIEWER_RC_VERSION_STRING "${PROJECT_VERSION}")
     configure_file(fontviewer.rc.in ${CMAKE_CURRENT_BINARY_DIR}/fontviewer.rc @ONLY)
+    set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/fontviewer.rc PROPERTIES
+        OBJECT_DEPENDS "${FONTVIEWER_GIT_VERSION_HEADER}"
+    )
     set(FONTVIEWER_RC_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/fontviewer.rc)
 endif()
 
@@ -20,7 +40,7 @@ endif()
 # /DEBUG: Linker flag to create the PDB
 # /OPT:REF & /OPT:ICF: Optimize the binary despite debug info presence
 if(MSVC)
-    add_compile_options("$<$<CONFIG:Release>:/Zi>")
+    add_compile_options(/utf-8 "$<$<CONFIG:Release>:/Zi>")
     add_link_options(
         "$<$<CONFIG:Release>:/DEBUG>"
         "$<$<CONFIG:Release>:/OPT:REF>"
@@ -86,7 +106,11 @@ set(FONTVIEWER_SOURCES
 )
 
 add_library(fontviewer_core OBJECT ${FONTVIEWER_SOURCES})
-target_include_directories(fontviewer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_dependencies(fontviewer_core fontviewer_git_version)
+target_include_directories(fontviewer_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
+)
 target_link_libraries(fontviewer_core PRIVATE
     SeerSdk::SeerSdk
     freetype
@@ -101,6 +125,8 @@ target_compile_definitions(fontviewer_core PRIVATE
 )
 
 add_library(fontviewer SHARED $<TARGET_OBJECTS:fontviewer_core> ${FONTVIEWER_RC_SOURCES})
+add_dependencies(fontviewer fontviewer_git_version)
+target_include_directories(fontviewer PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(fontviewer PRIVATE
     SeerSdk::SeerSdk
     freetype
@@ -132,7 +158,10 @@ add_executable(fontviewer_tests
     tests/viewer_tests.cpp
     $<TARGET_OBJECTS:fontviewer_core>
 )
-target_include_directories(fontviewer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(fontviewer_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
+)
 target_compile_definitions(fontviewer_tests PRIVATE
     FONTVIEWER_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
 )

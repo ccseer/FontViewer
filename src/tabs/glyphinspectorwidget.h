@@ -1,19 +1,49 @@
 #pragma once
 
+#include <QColor>
 #include <QFont>
+#include <QPalette>
 #include <QRectF>
+#include <QSet>
+#include <QStringList>
 #include <QVector>
 #include <QWidget>
 
+#include <array>
+#include <optional>
+
 #include "engine/fontinspectorengine.h"
 
-class QCheckBox;
 class QLabel;
+class QPushButton;
 class QVBoxLayout;
 class QGroupBox;
 
+namespace fontui {
+class FlowSeparator;
+}
+
 // Forward declaration for preview widget
 class GlyphPreviewWidget;
+
+enum class GlyphGuideId {
+    Baseline = 0,
+    Ascent,
+    Descent,
+    CapHeight,
+    XHeight,
+    Underline,
+    Strikeout,
+    Advance,
+    Bearings,
+    BBox,
+    Center,
+};
+
+QString glyphGuideKey(GlyphGuideId id);
+std::optional<GlyphGuideId> glyphGuideFromKey(const QString &key);
+QColor glyphGuideColor(GlyphGuideId id, const QPalette &pal,
+                       bool opaque = false);
 
 class GlyphInspectorWidget : public QWidget {
     Q_OBJECT
@@ -55,6 +85,9 @@ public:
         return m_show_outline_points;
     }
     void setOutlineShortcutHint(const QString &hint);
+    QStringList hiddenGuideIds() const;
+    void setHiddenGuideIds(const QStringList &ids);
+    QVector<QPushButton *> guidePillButtons() const;
     GlyphPreviewWidget *previewWidget() const
     {
         return m_preview_widget;
@@ -70,10 +103,19 @@ protected:
     void changeEvent(QEvent *event) override;
 
 private:
+    static constexpr int kGuideCount = 11;
+
     void createUI();
     void applyEmptyLabelPalette();
     void updateMetrics();
     void updateLabels();
+    void syncGuideControls();
+    bool hasHiddenAvailableGuide(
+        const std::array<bool, kGuideCount> &availability) const;
+    void updateToggleAllButton(
+        const std::array<bool, kGuideCount> &availability);
+    void refreshThemeVisuals();
+    std::array<bool, kGuideCount> computeGuideAvailability() const;
     QString getUnicodeBlockName(ushort code_point);
 
     // Data
@@ -112,7 +154,13 @@ private:
     QLabel *m_label_units_per_em;
     QLabel *m_label_underline;
     QLabel *m_label_strikeout;
-    QCheckBox *m_chk_outline;
+    QSet<GlyphGuideId> m_hidden_guides;
+    QVector<QPushButton *> m_guide_pills;
+    QPushButton *m_btn_outline    = nullptr;
+    QPushButton *m_btn_toggle_all = nullptr;
+    fontui::FlowSeparator *m_guide_sep = nullptr;
+    QWidget *m_guide_bar               = nullptr;
+    QString m_outline_hint;
     GlyphPreviewWidget *m_preview_widget;
     QLabel *m_label_no_selection;
     QGroupBox *m_group_unicode;
@@ -143,6 +191,16 @@ public:
     bool isShowOutlinePoints() const
     {
         return m_show_outline_points;
+    }
+    void setGuideVisible(GlyphGuideId id, bool visible);
+    bool isGuideVisible(GlyphGuideId id) const
+    {
+        return !m_hidden_guides.contains(id);
+    }
+    void setHiddenGuides(const QSet<GlyphGuideId> &hidden);
+    const QSet<GlyphGuideId> &hiddenGuides() const
+    {
+        return m_hidden_guides;
     }
     void clear();
 
@@ -182,6 +240,7 @@ private:
     qreal m_advance_width       = 0;
     bool m_has_data             = false;
     bool m_show_outline_points  = false;
+    QSet<GlyphGuideId> m_hidden_guides;
     mutable QVector<QRectF> m_last_label_rects;
     mutable QStringList m_last_label_texts;
     mutable QRectF m_last_underline_band;

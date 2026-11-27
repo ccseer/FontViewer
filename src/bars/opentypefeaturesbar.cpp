@@ -2,6 +2,7 @@
 
 #include <QEvent>
 #include <QFontMetrics>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayout>
@@ -10,6 +11,10 @@
 #include <QPalette>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScopedValueRollback>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QtMath>
@@ -19,6 +24,7 @@
 namespace {
 constexpr int kFeaturePillHSpacing = 5;
 constexpr int kFeaturePillVSpacing = 4;
+constexpr int kDrawerMaxHeightPx   = 156;
 
 QString formatFeaturePillText(const FontFeatureInfo &info,
                               const QFontMetrics &fm,
@@ -33,134 +39,34 @@ QString formatFeaturePillText(const FontFeatureInfo &info,
     return QStringLiteral("%1 · %2").arg(tag_str, label);
 }
 
-class FlowLayout : public QLayout {
-public:
-    explicit FlowLayout(QWidget *parent = nullptr, int h_spacing = 5,
-                        int v_spacing = 4)
-        : QLayout(parent), m_h_spacing(h_spacing), m_v_spacing(v_spacing)
-    {
-        setContentsMargins(0, 0, 0, 0);
-    }
-
-    ~FlowLayout() override
-    {
-        QLayoutItem *item = nullptr;
-        while ((item = takeAt(0)) != nullptr) {
-            delete item;
-        }
-    }
-
-    void setSpacingPair(int h_spacing, int v_spacing)
-    {
-        if (m_h_spacing == h_spacing && m_v_spacing == v_spacing) {
-            return;
-        }
-        m_h_spacing = h_spacing;
-        m_v_spacing = v_spacing;
-        invalidate();
-    }
-
-    void addItem(QLayoutItem *item) override
-    {
-        m_items.append(item);
-    }
-
-    int count() const override
-    {
-        return m_items.size();
-    }
-
-    QLayoutItem *itemAt(int index) const override
-    {
-        return m_items.value(index);
-    }
-
-    QLayoutItem *takeAt(int index) override
-    {
-        if (index >= 0 && index < m_items.size()) {
-            return m_items.takeAt(index);
-        }
-        return nullptr;
-    }
-
-    Qt::Orientations expandingDirections() const override
-    {
-        return {};
-    }
-
-    bool hasHeightForWidth() const override
-    {
-        return true;
-    }
-
-    int heightForWidth(int width) const override
-    {
-        return doLayout(QRect(0, 0, qMax(1, width), 0), true);
-    }
-
-    void setGeometry(const QRect &rect) override
-    {
-        QLayout::setGeometry(rect);
-        doLayout(rect, false);
-    }
-
-    QSize sizeHint() const override
-    {
-        return minimumSize();
-    }
-
-    QSize minimumSize() const override
-    {
-        QSize size;
-        for (const QLayoutItem *item : m_items) {
-            if (!item->isEmpty()) {
-                size = size.expandedTo(item->minimumSize());
+QVector<QByteArray> mutexPeerTags(const QByteArray &tag)
+{
+    static constexpr const char *kMutexGroups[][3] = {
+        {"lnum", "onum", nullptr},
+        {"pnum", "tnum", nullptr},
+        {"frac", "afrc", nullptr},
+        {"sups", "subs", "sinf"},
+    };
+    for (const auto &group : kMutexGroups) {
+        bool in_group = false;
+        for (const char *member : group) {
+            if (member && tag == member) {
+                in_group = true;
+                break;
             }
         }
-        const QMargins m = contentsMargins();
-        size += QSize(m.left() + m.right(), m.top() + m.bottom());
-        return size;
-    }
-
-private:
-    int doLayout(const QRect &rect, bool test_only) const
-    {
-        int left   = 0;
-        int top    = 0;
-        int right  = 0;
-        int bottom = 0;
-        getContentsMargins(&left, &top, &right, &bottom);
-        const QRect effective = rect.adjusted(left, top, -right, -bottom);
-        int x                 = effective.x();
-        int y                 = effective.y();
-        int line_height       = 0;
-
-        for (QLayoutItem *item : m_items) {
-            if (item->isEmpty()) {
-                continue;
+        if (in_group) {
+            QVector<QByteArray> peers;
+            for (const char *member : group) {
+                if (member && tag != member) {
+                    peers.append(QByteArray(member));
+                }
             }
-            const QSize item_sz = item->sizeHint();
-            int next_x          = x + item_sz.width() + m_h_spacing;
-            if (next_x - m_h_spacing - 1 > effective.right()
-                && line_height > 0) {
-                x           = effective.x();
-                y           = y + line_height + m_v_spacing;
-                next_x      = x + item_sz.width() + m_h_spacing;
-                line_height = 0;
-            }
-            if (!test_only) {
-                item->setGeometry(QRect(QPoint(x, y), item_sz));
-            }
-            x           = next_x;
-            line_height = qMax(line_height, item_sz.height());
+            return peers;
         }
-        return y + line_height - rect.y() + bottom;
     }
-
-    QVector<QLayoutItem *> m_items;
-    int m_h_spacing = 5;
-    int m_v_spacing = 4;
-};
+    return {};
+}
 
 class FeaturePillButton : public QPushButton {
 public:
@@ -243,7 +149,7 @@ protected:
         QColor fg = fg_base;
 
         if (checked) {
-            bg     = accent;
+            bg = accent;
             bg.setAlpha(hovered ? (dark ? 68 : 44) : (dark ? 48 : 28));
             border = accent;
             if (!hovered) {
@@ -316,6 +222,7 @@ public:
     explicit FeaturePillsContainer(QWidget *parent = nullptr) : QWidget(parent)
     {
         setFocusPolicy(Qt::NoFocus);
+        setAutoFillBackground(false);
         QSizePolicy sp(QSizePolicy::Expanding, QSizePolicy::Preferred);
         sp.setHeightForWidth(true);
         setSizePolicy(sp);
@@ -364,36 +271,55 @@ OpenTypeFeaturesBar::OpenTypeFeaturesBar(QWidget *parent) : QWidget(parent)
 
     m_root_layout = new QVBoxLayout(this);
 
-    m_header_layout = new QHBoxLayout();
-    m_header_layout->setContentsMargins(0, 0, 0, 0);
-
-    auto *title = new QLabel(tr("OpenType Features:"), this);
-    title->setFocusPolicy(Qt::NoFocus);
-    m_header_layout->addWidget(title);
-
-    m_note = new QLabel(tr("Text preview only"), this);
+    m_note = new QLabel(this);
+    m_note->setObjectName(QStringLiteral("opentype_note"));
     m_note->setFocusPolicy(Qt::NoFocus);
     // The spacing hint is long enough to exceed a narrow preview pane, so it
     // wraps instead of widening the whole viewer layout.
     m_note->setWordWrap(true);
-    applyPalette();
-    m_header_layout->addWidget(m_note, 1);
+    m_note->hide();
+    m_root_layout->addWidget(m_note);
 
-    m_reset = new fontui::CompactActionButton(tr("Reset"), m_dpr, this);
-    m_reset->setToolTip(tr("Reset OpenType features"));
+    m_body_layout = new QHBoxLayout();
+    m_body_layout->setContentsMargins(0, 0, 0, 0);
+
+    m_scroll_area = new QScrollArea(this);
+    m_scroll_area->setObjectName(QStringLiteral("opentype_features_scroll"));
+    m_scroll_area->setFrameShape(QFrame::NoFrame);
+    m_scroll_area->setWidgetResizable(true);
+    m_scroll_area->setFocusPolicy(Qt::NoFocus);
+    m_scroll_area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scroll_area->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_scroll_area->viewport()->setAutoFillBackground(false);
+    m_scroll_area->verticalScrollBar()->setProperty("is_readonly", true);
+    m_scroll_area->verticalScrollBar()->setFocusPolicy(Qt::NoFocus);
+    m_scroll_area->horizontalScrollBar()->setProperty("is_readonly", true);
+    m_scroll_area->horizontalScrollBar()->setFocusPolicy(Qt::NoFocus);
+
+    m_pills_host = new FeaturePillsContainer(m_scroll_area);
+    new fontui::FlowLayout(m_pills_host,
+                           fontui::dp(kFeaturePillHSpacing, m_dpr),
+                           fontui::dp(kFeaturePillVSpacing, m_dpr));
+    m_scroll_area->setWidget(m_pills_host);
+    m_body_layout->addWidget(m_scroll_area, 1);
+
+    m_reset = new fontui::CompactActionButton(tr("Clear"), m_dpr, this);
+    m_reset->setObjectName(QStringLiteral("opentype_reset_btn"));
+    m_reset->setToolTip(tr("Clear OpenType features"));
+    QSizePolicy reset_sp = m_reset->sizePolicy();
+    // Reserve Clear's slot in the top-right corner so toggling a pill never
+    // reflows the pill rows or shifts vertical layout height.
+    reset_sp.setRetainSizeWhenHidden(true);
+    m_reset->setSizePolicy(reset_sp);
     m_reset->hide();
     connect(m_reset, &QPushButton::clicked, this, [this]() {
         resetOverrides();
         emit sigInteractionClearFocus();
     });
-    m_header_layout->addWidget(m_reset);
-    m_root_layout->addLayout(m_header_layout);
+    m_body_layout->addWidget(m_reset, 0, Qt::AlignTop | Qt::AlignRight);
+    m_root_layout->addLayout(m_body_layout);
 
-    m_pills_host = new FeaturePillsContainer(this);
-    new FlowLayout(m_pills_host, fontui::dp(kFeaturePillHSpacing, m_dpr),
-                   fontui::dp(kFeaturePillVSpacing, m_dpr));
-    m_root_layout->addWidget(m_pills_host);
-
+    applyPalette();
     updateLayoutMetrics();
     hide();
 }
@@ -406,23 +332,31 @@ void OpenTypeFeaturesBar::setDpr(qreal dpr)
     }
     m_dpr = clamped;
     updateLayoutMetrics();
+    updateScrollAreaHeight();
 }
 
 void OpenTypeFeaturesBar::updateLayoutMetrics()
 {
     if (m_root_layout) {
-        m_root_layout->setContentsMargins(0, fontui::dp(2, m_dpr), 0,
-                                          fontui::dp(2, m_dpr));
+        const int lr = fontui::dp(8, m_dpr);
+        m_root_layout->setContentsMargins(lr, fontui::dp(2, m_dpr), lr,
+                                          fontui::dp(4, m_dpr));
         m_root_layout->setSpacing(fontui::dp(4, m_dpr));
     }
-    if (m_header_layout) {
-        m_header_layout->setSpacing(fontui::dp(8, m_dpr));
+    if (m_body_layout) {
+        m_body_layout->setSpacing(fontui::dp(8, m_dpr));
     }
     if (m_reset) {
         static_cast<fontui::CompactActionButton *>(m_reset)->setDpr(m_dpr);
     }
+    for (fontui::FlowSeparator *sep : m_separators) {
+        if (sep) {
+            sep->setDpr(m_dpr);
+        }
+    }
     if (m_pills_host) {
-        if (auto *flow = static_cast<FlowLayout *>(m_pills_host->layout())) {
+        if (auto *flow
+            = static_cast<fontui::FlowLayout *>(m_pills_host->layout())) {
             flow->setSpacingPair(fontui::dp(kFeaturePillHSpacing, m_dpr),
                                  fontui::dp(kFeaturePillVSpacing, m_dpr));
         }
@@ -446,13 +380,17 @@ bool OpenTypeFeaturesBar::isLigatureFeatureTag(const QByteArray &tag)
 
 void OpenTypeFeaturesBar::applyPalette()
 {
-    if (!m_note) {
-        return;
+    if (m_note) {
+        QPalette note_pal = palette();
+        note_pal.setColor(QPalette::WindowText,
+                          fontui::mutedTextColor(palette()));
+        m_note->setPalette(note_pal);
     }
-    QPalette note_pal = palette();
-    note_pal.setColor(QPalette::WindowText,
-                      fontui::mutedTextColor(palette()));
-    m_note->setPalette(note_pal);
+    for (fontui::FlowSeparator *sep : m_separators) {
+        if (sep) {
+            sep->update();
+        }
+    }
 }
 
 void OpenTypeFeaturesBar::changeEvent(QEvent *event)
@@ -464,11 +402,37 @@ void OpenTypeFeaturesBar::changeEvent(QEvent *event)
     }
 }
 
+void OpenTypeFeaturesBar::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    updateScrollAreaHeight();
+}
+
+void OpenTypeFeaturesBar::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    updateScrollAreaHeight();
+    if (m_body_layout) {
+        m_body_layout->invalidate();
+    }
+    if (m_root_layout) {
+        m_root_layout->invalidate();
+        m_root_layout->activate();
+    }
+    updateGeometry();
+    if (QWidget *p = parentWidget()) {
+        if (QLayout *pl = p->layout()) {
+            pl->invalidate();
+            pl->activate();
+        }
+    }
+}
+
 void OpenTypeFeaturesBar::setResetShortcutHint(const QString &hint)
 {
     m_reset_hint = hint;
     if (m_reset) {
-        const QString base = tr("Reset OpenType features");
+        const QString base = tr("Clear OpenType features");
         m_reset->setToolTip(
             hint.isEmpty() ? base : QStringLiteral("%1 (%2)").arg(base, hint));
     }
@@ -489,6 +453,14 @@ void OpenTypeFeaturesBar::rebuild(const QVector<FontFeatureInfo> &features)
     }
     m_controls.clear();
 
+    for (fontui::FlowSeparator *sep : m_separators) {
+        if (sep) {
+            sep->hide();
+            sep->deleteLater();
+        }
+    }
+    m_separators.clear();
+
     if (auto *flow = m_pills_host->layout()) {
         while (QLayoutItem *item = flow->takeAt(0)) {
             delete item;
@@ -497,12 +469,21 @@ void OpenTypeFeaturesBar::rebuild(const QVector<FontFeatureInfo> &features)
 
     if (features.isEmpty()) {
         updatePillsState();
-        hide();
+        updateScrollAreaHeight();
         return;
     }
 
-    auto *flow = m_pills_host->layout();
+    auto *flow     = m_pills_host->layout();
+    int prev_group = -1;
     for (const FontFeatureInfo &info : features) {
+        const int group = FontInspectorEngine::featureGroupIndex(info.tag);
+        if (prev_group != -1 && group != prev_group) {
+            auto *sep = new fontui::FlowSeparator(m_dpr, m_pills_host);
+            flow->addWidget(sep);
+            m_separators.append(sep);
+        }
+        prev_group = group;
+
         auto *btn             = new FeaturePillButton(info, m_dpr, m_pills_host);
         const QString tag_str = QString::fromLatin1(info.tag);
         const QString tip
@@ -515,15 +496,8 @@ void OpenTypeFeaturesBar::rebuild(const QVector<FontFeatureInfo> &features)
 
         const QByteArray tag = info.tag;
         const bool def_on    = info.default_on;
-        connect(btn, &QPushButton::toggled, this, [this, tag, def_on](bool on) {
-            if (on == def_on) {
-                m_overrides.remove(tag);
-            }
-            else {
-                m_overrides.insert(tag, on);
-            }
-            updatePillsState();
-            emit sigFeaturesChanged();
+        connect(btn, &QPushButton::toggled, this, [this, tag](bool on) {
+            applyToggleWithMutex(tag, on);
             emit sigInteractionClearFocus();
         });
 
@@ -533,9 +507,78 @@ void OpenTypeFeaturesBar::rebuild(const QVector<FontFeatureInfo> &features)
     }
 
     updatePillsState();
-    show();
     m_pills_host->updateGeometry();
+    updateScrollAreaHeight();
+    if (m_scroll_area && m_scroll_area->verticalScrollBar()) {
+        m_scroll_area->verticalScrollBar()->setValue(0);
+    }
     updateGeometry();
+}
+
+void OpenTypeFeaturesBar::applyToggleWithMutex(const QByteArray &tag,
+                                               bool enabled)
+{
+    bool found      = false;
+    bool def_on     = false;
+    bool btn_dirty  = false;
+    for (const FeaturePillControl &ctrl : m_controls) {
+        if (ctrl.tag == tag) {
+            found  = true;
+            def_on = ctrl.default_on;
+            if (ctrl.button && ctrl.button->isChecked() != enabled) {
+                btn_dirty = true;
+                QSignalBlocker blocker(ctrl.button);
+                ctrl.button->setChecked(enabled);
+            }
+            break;
+        }
+    }
+    if (!found) {
+        return;
+    }
+
+    const bool current_on = m_overrides.value(tag, def_on);
+    QVector<int> dirty_peers;
+    if (enabled) {
+        const QVector<QByteArray> peers = mutexPeerTags(tag);
+        for (int i = 0; i < m_controls.size(); ++i) {
+            const FeaturePillControl &peer = m_controls.at(i);
+            if (!peers.contains(peer.tag)) {
+                continue;
+            }
+            const bool peer_on = m_overrides.value(peer.tag, peer.default_on);
+            if (peer_on || (peer.button && peer.button->isChecked())) {
+                dirty_peers.append(i);
+            }
+        }
+    }
+    if (current_on == enabled && !btn_dirty && dirty_peers.isEmpty()) {
+        return;
+    }
+
+    if (enabled == def_on) {
+        m_overrides.remove(tag);
+    }
+    else {
+        m_overrides.insert(tag, enabled);
+    }
+
+    for (int idx : dirty_peers) {
+        const FeaturePillControl &peer = m_controls.at(idx);
+        if (peer.button) {
+            QSignalBlocker blocker(peer.button);
+            peer.button->setChecked(false);
+        }
+        if (!peer.default_on) {
+            m_overrides.remove(peer.tag);
+        }
+        else {
+            m_overrides.insert(peer.tag, false);
+        }
+    }
+
+    updatePillsState();
+    emit sigFeaturesChanged();
 }
 
 void OpenTypeFeaturesBar::setLetterSpacingActive(bool active)
@@ -546,30 +589,7 @@ void OpenTypeFeaturesBar::setLetterSpacingActive(bool active)
 
 void OpenTypeFeaturesBar::setFeatureEnabled(const QByteArray &tag, bool enabled)
 {
-    bool found  = false;
-    bool def_on = false;
-    for (const FeaturePillControl &ctrl : m_controls) {
-        if (ctrl.tag == tag) {
-            found  = true;
-            def_on = ctrl.default_on;
-            if (ctrl.button) {
-                QSignalBlocker blocker(ctrl.button);
-                ctrl.button->setChecked(enabled);
-            }
-            break;
-        }
-    }
-    if (!found) {
-        return;
-    }
-    if (enabled == def_on) {
-        m_overrides.remove(tag);
-    }
-    else {
-        m_overrides.insert(tag, enabled);
-    }
-    updatePillsState();
-    emit sigFeaturesChanged();
+    applyToggleWithMutex(tag, enabled);
 }
 
 bool OpenTypeFeaturesBar::isFeatureEnabled(const QByteArray &tag) const
@@ -628,16 +648,96 @@ void OpenTypeFeaturesBar::updatePillsState()
                     : ctrl.tooltip);
         }
     }
+    const bool show_note = m_spacing_active && has_ligature;
     if (m_note) {
-        if (m_spacing_active && has_ligature) {
+        if (show_note) {
             m_note->setText(
-                tr("Text preview only · Ligatures disabled while letter spacing ≠ 0"));
+                tr("Ligatures disabled while letter spacing ≠ 0"));
         }
         else {
-            m_note->setText(tr("Text preview only"));
+            m_note->clear();
+        }
+        if (m_note->isVisibleTo(this) != show_note) {
+            m_note->setVisible(show_note);
+            updateGeometry();
         }
     }
     if (m_reset) {
         m_reset->setVisible(!m_overrides.isEmpty());
+    }
+}
+
+void OpenTypeFeaturesBar::updateScrollAreaHeight()
+{
+    if (m_updating_scroll_height || !m_scroll_area || !m_pills_host) {
+        return;
+    }
+    QScopedValueRollback<bool> guard(m_updating_scroll_height, true);
+
+    if (m_controls.isEmpty()) {
+        if (m_scroll_area->minimumHeight() != 0
+            || m_scroll_area->maximumHeight() != 0) {
+            m_scroll_area->setFixedHeight(0);
+        }
+        return;
+    }
+
+    const int margin_lr
+        = m_root_layout
+              ? (m_root_layout->contentsMargins().left()
+                 + m_root_layout->contentsMargins().right())
+              : 0;
+    int ref_w = width();
+    if (QWidget *p = parentWidget();
+        p && p->isVisible() && p->width() > 0) {
+        int parent_w = p->width();
+        if (QLayout *pl = p->layout()) {
+            const QMargins pm = pl->contentsMargins();
+            parent_w          = qMax(1, parent_w - pm.left() - pm.right());
+        }
+        if (!isVisible() || ref_w <= 0 || ref_w != parent_w) {
+            ref_w = parent_w;
+        }
+    }
+    const int body_gap = m_body_layout ? m_body_layout->spacing() : 0;
+    const int reset_w
+        = m_reset ? (m_reset->sizeHint().width() + body_gap) : 0;
+    int avail_w = ref_w > 0 ? qMax(1, ref_w - margin_lr - reset_w) : 0;
+    if (avail_w <= 0) {
+        avail_w = m_scroll_area->width() > 0 ? m_scroll_area->width() : 400;
+    }
+
+    const int max_h     = fontui::dp(kDrawerMaxHeightPx, m_dpr);
+    const int natural_h = m_pills_host->heightForWidth(avail_w);
+    const bool need_sb  = (natural_h > max_h);
+    const int target_h  = need_sb ? max_h : natural_h;
+
+    const bool h_changed = (m_scroll_area->minimumHeight() != target_h
+                            || m_scroll_area->maximumHeight() != target_h);
+    if (h_changed) {
+        m_scroll_area->setFixedHeight(target_h);
+    }
+
+    const int sb_w = (need_sb && m_scroll_area->verticalScrollBar())
+                         ? m_scroll_area->verticalScrollBar()->sizeHint().width()
+                         : 0;
+    const int vp_w   = qMax(1, avail_w - sb_w);
+    const int host_h = qMax(target_h, m_pills_host->heightForWidth(vp_w));
+    if (m_pills_host->width() != vp_w || m_pills_host->height() != host_h) {
+        m_pills_host->resize(vp_w, host_h);
+    }
+    m_pills_host->updateGeometry();
+    m_scroll_area->updateGeometry();
+    if (h_changed) {
+        if (m_body_layout) {
+            m_body_layout->invalidate();
+        }
+        if (m_root_layout) {
+            m_root_layout->invalidate();
+            if (isVisible()) {
+                m_root_layout->activate();
+            }
+        }
+        updateGeometry();
     }
 }

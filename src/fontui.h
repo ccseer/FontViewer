@@ -2,13 +2,15 @@
 
 #include <QColor>
 #include <QIcon>
+#include <QLayout>
 #include <QOperatingSystemVersion>
 #include <QPalette>
 #include <QPushButton>
+#include <QVector>
+#include <QWidget>
 #include <QtGlobal>
 
 class QComboBox;
-class QWidget;
 
 namespace fontui {
 
@@ -36,10 +38,59 @@ public:
     QSize minimumSizeHint() const override;
 
 protected:
+    qreal dpr() const
+    {
+        return m_dpr;
+    }
     void paintEvent(QPaintEvent *event) override;
 
 private:
     qreal m_dpr = 1.0;
+};
+
+// Vertical divider for FlowLayout that carries the "flow_separator" property
+// so FlowLayout automatically hides leading, trailing, consecutive, or wrapped
+// separators during layout without mutating widget visibility.
+class FlowSeparator : public QWidget {
+public:
+    explicit FlowSeparator(qreal dpr, QWidget *parent = nullptr);
+
+    void setDpr(qreal dpr);
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    qreal m_dpr = 1.0;
+};
+
+class FlowLayout : public QLayout {
+public:
+    explicit FlowLayout(QWidget *parent = nullptr,
+                        int h_spacing   = 5,
+                        int v_spacing   = 4);
+    ~FlowLayout() override;
+
+    void setSpacingPair(int h_spacing, int v_spacing);
+    void addItem(QLayoutItem *item) override;
+    int count() const override;
+    QLayoutItem *itemAt(int index) const override;
+    QLayoutItem *takeAt(int index) override;
+    Qt::Orientations expandingDirections() const override;
+    bool hasHeightForWidth() const override;
+    int heightForWidth(int width) const override;
+    void setGeometry(const QRect &rect) override;
+    QSize sizeHint() const override;
+    QSize minimumSize() const override;
+
+private:
+    int doLayout(const QRect &rect, bool test_only) const;
+
+    QVector<QLayoutItem *> m_items;
+    int m_h_spacing = 5;
+    int m_v_spacing = 4;
 };
 
 inline qreal clampDpr(qreal dpr)

@@ -1,4 +1,5 @@
 #include <windows.h>
+#include "gitversion.h"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION @FONTVIEWER_RC_VERSION@
@@ -15,12 +16,13 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "1218.io"
             VALUE "FileDescription", "FontViewer plugin for Seer"
-            VALUE "FileVersion", "@FONTVIEWER_RC_VERSION_STRING@"
+            VALUE "FileVersion", FONTVIEWER_VERSION_STR
+            VALUE "GitCommit", FONTVIEWER_GIT_HASH
             VALUE "InternalName", "fontviewer"
-            VALUE "LegalCopyright", "Copyright (C) 2024 Corey (https://1218.io)"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Corey (https://1218.io)"
             VALUE "OriginalFilename", "fontviewer.dll"
             VALUE "ProductName", "FontViewer"
-            VALUE "ProductVersion", "@FONTVIEWER_RC_VERSION_STRING@"
+            VALUE "ProductVersion", FONTVIEWER_PRODUCT_VERSION_STRING
         END
     END
     BLOCK "VarFileInfo"
