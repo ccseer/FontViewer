@@ -5197,7 +5197,7 @@ void ViewerTest::sliderBadgesStayCloserToOwnSliderAndDrawerUsesClear()
     QVERIFY(outline_pill->toolTip().contains(QStringLiteral(" — ")));
 
     QCOMPARE(QString::fromLatin1(FONTVIEWER_VERSION_STR),
-             QStringLiteral("1.4.1"));
+             QStringLiteral("1.5.0"));
     QVERIFY(!QString::fromLatin1(FONTVIEWER_GIT_HASH).isEmpty());
     QCOMPARE(QString::fromLatin1(FONTVIEWER_PRODUCT_VERSION_STRING),
              QStringLiteral("%1+%2").arg(
