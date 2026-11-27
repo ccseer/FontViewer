@@ -41,10 +41,10 @@ Customizable keyboard shortcuts are stored under `[Shortcuts]` in `fontviewer.in
 
 ## Screenshots
 
-![](res/ScreenShot_2026-05-04_185905_462.png)
-![](res/ScreenShot_2026-05-04_190016_008.png)
-![](res/ScreenShot_2026-05-04_190057_574.png)
-![](res/ScreenShot_2026-05-04_190150_741.png)
+![](res/screenshot-1-text.png)
+![](res/screenshot-2-sample.png)
+![](res/screenshot-3-characters.png)
+![](res/screenshot-4-glyph-inspector.png)
 
 ## Building and Running
 
