@@ -556,7 +556,7 @@ TextPreviewTab::TextPreviewTab(QWidget *parent) : QWidget(parent)
 {
     setFocusPolicy(Qt::NoFocus);
 
-    auto *layout = new QGridLayout(this);
+    auto *layout = new fontui::MinHfwGridLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 

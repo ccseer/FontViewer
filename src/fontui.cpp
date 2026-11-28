@@ -430,6 +430,11 @@ int FlowLayout::doLayout(const QRect &rect, bool test_only) const
     return y + line_height - rect.y() + bottom;
 }
 
+int MinHfwGridLayout::heightForWidth(int width) const
+{
+    return hasHeightForWidth() ? minimumHeightForWidth(qMax(1, width)) : -1;
+}
+
 SurfaceFrame::SurfaceFrame(QWidget *parent) : QWidget(parent)
 {
     setFocusPolicy(Qt::NoFocus);

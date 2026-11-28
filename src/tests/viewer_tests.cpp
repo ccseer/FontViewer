@@ -293,6 +293,7 @@ private slots:
     void reviewFixesCharactersMenuLifetimeSliderFocusAndLazyNames();
     void reviewFixesHostPixelFontsNarrowBoundsAndSvgExportLifetime();
     void p1OffTabClearSelectionStripAndP2GlyphIdReset();
+    void tabHeightForWidthDoesNotInflateMinimumHeight();
 };
 
 void ViewerTest::escReleaseRunsAfterTheEventLoop()
@@ -6990,6 +6991,129 @@ void ViewerTest::p1OffTabClearSelectionStripAndP2GlyphIdReset()
     QCOMPARE(unicode_blocks::blockName(0x1E900u), QStringLiteral("Adlam"));
 
     QFontDatabase::removeApplicationFont(rob_id);
+}
+
+void ViewerTest::tabHeightForWidthDoesNotInflateMinimumHeight()
+{
+    const QString roboto_path = fixturePath("Roboto-Regular.ttf");
+    QVERIFY(!roboto_path.isEmpty());
+
+    QWidget frame;
+    auto *outer = new QGridLayout(&frame);
+    outer->setContentsMargins(0, 0, 0, 0);
+
+    auto *center_host = new QWidget(&frame);
+    auto *center_lay  = new QGridLayout(center_host);
+    center_lay->setContentsMargins(0, 0, 0, 0);
+    center_lay->setSpacing(0);
+
+    auto *container = new QWidget(center_host);
+    auto *vlay      = new QVBoxLayout(container);
+    vlay->setContentsMargins(0, 0, 0, 0);
+    vlay->setSpacing(0);
+
+    auto *top_spacer = new QWidget(container);
+    top_spacer->setFixedHeight(40);
+    auto *fw = new FontWidget(container);
+    auto *btm_spacer = new QWidget(container);
+    btm_spacer->setFixedHeight(44);
+    vlay->addWidget(top_spacer);
+    vlay->addWidget(fw);
+    vlay->addWidget(btm_spacer);
+    center_lay->addWidget(container);
+    outer->addWidget(center_host, 1, 0);
+
+    QVERIFY(fw->init(roboto_path));
+    fw->setCollapsed(true);
+    fw->setCurrentFontSize(48);
+
+    frame.resize(1024, 430);
+    frame.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&frame));
+    QApplication::processEvents();
+
+    auto *tabs     = fw->findChild<QTabWidget *>();
+    auto *text_tab = fw->findChild<TextPreviewTab *>();
+    auto *char_tab = fw->findChild<CharactersTab *>();
+    QVERIFY(tabs && text_tab && char_tab);
+    QCOMPARE(tabs->count(), 4);
+
+    for (int i = 0; i < tabs->count(); ++i) {
+        tabs->setCurrentIndex(i);
+        QApplication::processEvents();
+        QVERIFY(fw->layout()->minimumHeightForWidth(1024) <= 320);
+        QCOMPARE(center_host->height(), frame.height());
+    }
+
+    QVERIFY(text_tab->heightForWidth(340) > text_tab->heightForWidth(1024));
+    QVERIFY(char_tab->heightForWidth(340) > char_tab->heightForWidth(1024));
+    QVERIFY(fw->layout()->minimumHeightForWidth(340) <= 346);
+
+    text_tab->setWaterfallEnabled(true);
+    tabs->setCurrentWidget(text_tab);
+    frame.resize(340, 430);
+    QApplication::processEvents();
+    QVERIFY(fw->layout()->minimumHeightForWidth(340) <= 346);
+    QCOMPARE(center_host->height(), frame.height());
+
+    // Direct QBoxLayout / QGridLayout hosting of TextPreviewTab or CharactersTab
+    // (outside QTabWidget) must also keep heightForWidth() at minimum height,
+    // and respect widget contentsMargins().
+    for (bool test_chars : {false, true}) {
+        QWidget direct_frame;
+        auto *d_outer = new QGridLayout(&direct_frame);
+        d_outer->setContentsMargins(0, 0, 0, 0);
+
+        auto *d_center_host = new QWidget(&direct_frame);
+        auto *d_center_lay  = new QGridLayout(d_center_host);
+        d_center_lay->setContentsMargins(0, 0, 0, 0);
+        d_center_lay->setSpacing(0);
+
+        auto *d_container = new QWidget(d_center_host);
+        auto *d_vlay      = new QVBoxLayout(d_container);
+        d_vlay->setContentsMargins(0, 0, 0, 0);
+        d_vlay->setSpacing(0);
+
+        auto *d_top = new QWidget(d_container);
+        d_top->setFixedHeight(40);
+        QWidget *tab = nullptr;
+        if (test_chars) {
+            auto *ct = new CharactersTab(d_container);
+            ct->setCodePoints({0x0041u, 0x0042u}, {10u, 11u});
+            tab = ct;
+        }
+        else {
+            auto *tt = new TextPreviewTab(d_container);
+            tt->setWaterfallEnabled(true);
+            tab = tt;
+        }
+        auto *d_btm = new QWidget(d_container);
+        d_btm->setFixedHeight(44);
+        d_vlay->addWidget(d_top);
+        d_vlay->addWidget(tab);
+        d_vlay->addWidget(d_btm);
+        d_center_lay->addWidget(d_container);
+        d_outer->addWidget(d_center_host, 1, 0);
+
+        direct_frame.resize(1024, 430);
+        direct_frame.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&direct_frame));
+        QApplication::processEvents();
+
+        QVERIFY(tab->heightForWidth(1024) <= 220);
+        QCOMPARE(tab->layout()->heightForWidth(1024),
+                 tab->layout()->minimumHeightForWidth(1024));
+        QCOMPARE(d_center_host->height(), direct_frame.height());
+
+        direct_frame.resize(340, 430);
+        QApplication::processEvents();
+        QVERIFY(tab->heightForWidth(340) > tab->heightForWidth(1024));
+        QCOMPARE(d_center_host->height(), direct_frame.height());
+
+        const int base_hfw = tab->heightForWidth(600);
+        tab->setContentsMargins(4, 6, 4, 8);
+        QVERIFY(tab->heightForWidth(600) >= base_hfw + 14);
+    }
 }
 
 QTEST_MAIN(ViewerTest)

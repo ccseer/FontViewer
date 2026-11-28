@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QGridLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QLayout>
@@ -95,6 +96,17 @@ private:
     QVector<QLayoutItem *> m_items;
     int m_h_spacing = 5;
     int m_v_spacing = 4;
+};
+
+// Grid layout whose heightForWidth() reports minimumHeightForWidth() so parent
+// layouts (both QStackedLayout inside QTabWidget and QBoxLayout/QGridLayout
+// via QWidgetItem) wrap toolbars without turning scrollable viewport sizeHints
+// into minimum-height floors.
+class MinHfwGridLayout : public QGridLayout {
+public:
+    using QGridLayout::QGridLayout;
+
+    int heightForWidth(int width) const override;
 };
 
 // Host-aligned rounded surface card behind preview/grid viewports.

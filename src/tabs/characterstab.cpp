@@ -54,7 +54,7 @@ CharactersTab::CharactersTab(QWidget *parent) : QWidget(parent)
 {
     setFocusPolicy(Qt::NoFocus);
 
-    auto *root = new QGridLayout(this);
+    auto *root = new fontui::MinHfwGridLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
